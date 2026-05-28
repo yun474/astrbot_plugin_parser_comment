@@ -9,8 +9,8 @@ from .nga import NGAParser
 from .tiktok import TikTokParser
 from .twitter import TwitterParser
 from .weibo import WeiBoParser
-from .xiaoheihe import XiaoheiheParser
 from .xhs import XHSParser
+from .xiaoheihe import XiaoheiheParser
 from .youtube import YouTubeParser
 from .zhihu import ZhihuParser
 

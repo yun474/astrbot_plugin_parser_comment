@@ -148,16 +148,20 @@
                         "type": "text",
                         "default": ""
                     },
-                    "video_codecs": {
+                    "video_codec_list": {
                         "description": "B站视频编码",
-                        "hint": "优先下载的编码类型，可选：AVC、AV1、HEV。推荐用兼容性较好的AVC",
-                        "type": "string",
+                        "hint": "优先下载的编码类型，可选：AVC、AV1、HEV。失败时会按列表依次回退",
+                        "type": "list",
                         "options": [
                             "AVC",
                             "AV1",
                             "HEV"
                         ],
-                        "default": "AVC"
+                        "default": [
+                            "AVC",
+                            "AV1",
+                            "HEV"
+                        ]
                     },
                     "video_quality": {
                         "description": "B站视频分辨率",
@@ -307,7 +311,11 @@
                         "hint": "仅影响小黑盒视频：不发送视频、只发送第一个视频、发送全部视频。",
                         "type": "string",
                         "default": "first",
-                        "options": ["none", "first", "all"]
+                        "options": [
+                            "none",
+                            "first",
+                            "all"
+                        ]
                     }
                 }
             },
