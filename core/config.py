@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import zoneinfo
 from collections.abc import Mapping, MutableMapping
+from pathlib import Path
 from types import MappingProxyType, UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
@@ -155,7 +155,7 @@ class ParserItem(ConfigNode):
     cookies: str | None
     show_body_text: bool | None
     video_send_mode: str | None
-    video_codecs: str | None
+    video_codec_list: list | None
     video_quality: str | None
 
     @property

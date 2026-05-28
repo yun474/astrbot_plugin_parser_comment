@@ -44,10 +44,9 @@ class BilibiliParser(BaseParser):
         self.video_quality = getattr(
             VideoQuality, str(self.mycfg.video_quality).upper(), VideoQuality._720P
         )
-        self.video_codecs = getattr(
-            VideoCodecs, str(self.mycfg.video_codecs).upper(), VideoCodecs.AVC
-        )
-
+        self.video_codecs = []
+        for c in self.mycfg.video_codec_list or [VideoCodecs.AVC]:
+            self.video_codecs.append(c)
         self.login = BilibiliLogin(config)
 
     @handle("b23.tv", r"b23\.tv/[A-Za-z\d\._?%&+\-=/#]+")
@@ -153,14 +152,16 @@ class BilibiliParser(BaseParser):
         # 处理分 p
         page_info = video_info.extract_info_with_page(page_num)
 
-        # 获取 AI 总结
+        # 获取 AI 总结（默认提示）
+        ai_summary = ""
         if self.login._credential:
-            cid = await video.get_cid(page_info.index)
-            ai_conclusion = await video.get_ai_conclusion(cid)
-            ai_conclusion = convert(ai_conclusion, AIConclusion)
-            ai_summary = ai_conclusion.summary
-        else:
-            ai_summary: str = "哔哩哔哩 cookie 未配置或失效, 无法使用 AI 总结"
+            try:
+                cid = await video.get_cid(page_info.index)
+                ai_conclusion = await video.get_ai_conclusion(cid)
+                ai_conclusion = convert(ai_conclusion, AIConclusion)
+                ai_summary = ai_conclusion.summary
+            except Exception:
+                ai_summary = "哔哩哔哩 cookie 未配置或失效, 无法使用 AI 总结"
 
         url = f"https://bilibili.com/{video_info.bvid}"
         url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
@@ -415,7 +416,7 @@ class BilibiliParser(BaseParser):
         detecter = VideoDownloadURLDataDetecter(download_url_data)
         streams = detecter.detect_best_streams(
             video_max_quality=self.video_quality,
-            codecs=[self.video_codecs],
+            codecs=self.video_codecs,
             no_dolby_video=True,
             no_hdr=True,
         )
