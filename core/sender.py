@@ -64,13 +64,13 @@ class MessageSender:
         self,
         path: Path,
         *,
-        inline_bytes: bool = False,
+        inline_bytes: bool = True,
     ) -> Image:
         """构造图片消息段。
 
-        移植说明：OneBot/aiocqhttp 在合并转发 Node 里有时会把 file://
-        本地图片重新解析成相对路径，导致发送阶段报 No such file。合并转发
-        场景下改用 fromBytes 内联图片，避免节点二次取本地文件。
+        移植说明：OneBot/aiocqhttp 有时会把 file:// 本地图片重新解析成
+        相对路径，导致发送阶段报 No such file。这里优先用 fromBytes
+        内联图片，避免发送端二次读取本地文件路径。
         """
         if inline_bytes:
             try:
@@ -166,7 +166,7 @@ class MessageSender:
         - 转换为 AstrBot 消息组件
         """
         segs: list[BaseMessageComponent] = []
-        inline_images = bool(plan["force_merge"])
+        inline_images = True
 
         # 合并转发时，卡片以内联形式作为一个消息段参与合并
         if plan["render_card"] and plan["force_merge"]:
