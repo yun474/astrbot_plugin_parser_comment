@@ -194,6 +194,46 @@
                             "AI修复"
                         ],
                         "default": "_720P"
+                    },
+                    "comment_render_enable": {
+                        "description": "渲染评论区图片",
+                        "hint": "开启后，B站视频解析会额外发送一张评论区精选图片；主视频解析失败与否不依赖评论区渲染。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "comment_limit": {
+                        "description": "评论展示数量",
+                        "hint": "评论区图片最多展示的评论条数。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 20,
+                            "step": 1
+                        },
+                        "default": 9
+                    },
+                    "comment_filter_text": {
+                        "description": "过滤广告文本评论",
+                        "hint": "过滤疑似引流、联系方式、推广短链等评论。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "comment_filter_qr": {
+                        "description": "过滤二维码图片评论",
+                        "hint": "可选功能；仅在环境已安装 opencv-python 和 numpy 时生效，缺依赖时会自动降级为不过滤。",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "comment_qr_check_max": {
+                        "description": "二维码检查上限",
+                        "hint": "单次评论抓取最多检查多少张短文本配图，避免二维码识别拖慢解析。",
+                        "type": "int",
+                        "slider": {
+                            "min": 0,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 4
                     }
                 }
             },

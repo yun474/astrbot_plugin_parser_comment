@@ -43,6 +43,8 @@ class PageInfo:
 
 
 class VideoInfo(Struct):
+    aid: int
+    """av 号，B站评论接口使用它作为 oid"""
     bvid: str
     """bvid"""
     title: str

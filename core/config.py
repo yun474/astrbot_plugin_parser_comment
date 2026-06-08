@@ -157,6 +157,11 @@ class ParserItem(ConfigNode):
     video_send_mode: str | None
     video_codec_list: list | None
     video_quality: str | None
+    comment_render_enable: bool | None
+    comment_limit: int | None
+    comment_filter_text: bool | None
+    comment_filter_qr: bool | None
+    comment_qr_check_max: int | None
 
     @property
     def name(self) -> str:

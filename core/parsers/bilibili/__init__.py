@@ -10,7 +10,7 @@ from msgspec import convert
 from astrbot.api import logger
 
 from ...config import PluginConfig
-from ...data import ImageContent, MediaContent, Platform
+from ...data import ImageContent, MediaContent, Platform, SendGroup
 from ...exception import DownloadException, DurationLimitException
 from ..base import (
     BaseParser,
@@ -18,6 +18,8 @@ from ..base import (
     ParseException,
     handle,
 )
+from .comment_renderer import BiliCommentRenderer
+from .comment_service import BiliCommentService
 from .login import BilibiliLogin
 
 # 选择客户端
@@ -49,6 +51,23 @@ class BilibiliParser(BaseParser):
             for c in (self.mycfg.video_codec_list or ["AVC"])
         ]
         self.login = BilibiliLogin(config)
+        # 移植说明：R版评论区渲染只挂在这个 service 后面。后续跟原版
+        # 上游同步时，通常只需要保留本初始化块和 parse_video 的发送分组接线。
+        comment_enabled = self.mycfg.comment_render_enable
+        comment_limit = self.mycfg.comment_limit
+        text_filter = self.mycfg.comment_filter_text
+        qr_filter = self.mycfg.comment_filter_qr
+        qr_check_max = self.mycfg.comment_qr_check_max
+        self.comment_renderer = BiliCommentRenderer()
+        self.comment_service = BiliCommentService(
+            parser=self,
+            renderer=self.comment_renderer,
+            enabled=True if comment_enabled is None else bool(comment_enabled),
+            comment_limit=9 if comment_limit is None else int(comment_limit),
+            enable_text_ad_filter=True if text_filter is None else bool(text_filter),
+            enable_qr_filter=False if qr_filter is None else bool(qr_filter),
+            qr_check_max=4 if qr_check_max is None else int(qr_check_max),
+        )
 
     @handle("b23.tv", r"b23\.tv/[A-Za-z\d\._?%&+\-=/#]+")
     @handle("bili2233", r"bili2233\.cn/[A-Za-z\d\._?%&+\-=/#]+")
@@ -199,6 +218,20 @@ class BilibiliParser(BaseParser):
             page_info.cover,
             page_info.duration,
         )
+        comment_contents = self.comment_service.build_comment_image_content(
+            video_info.aid,
+            video_title=page_info.title,
+            video_cover=page_info.cover,
+        )
+
+        # 移植说明：第一组保持原版视频发送行为；评论图作为可选第二组。
+        # 评论抓取/渲染失败会静默跳过，不改变主解析和主下载链路。
+        send_groups = []
+        if comment_contents:
+            send_groups = [
+                SendGroup(contents=[video_content]),
+                SendGroup(contents=comment_contents, force_merge=True, render_card=False),
+            ]
 
         return self.result(
             url=url,
@@ -207,6 +240,7 @@ class BilibiliParser(BaseParser):
             text=text,
             author=author,
             contents=[video_content],
+            send_groups=send_groups,
             extra={"info": ai_summary},
         )
 

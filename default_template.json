@@ -5,7 +5,12 @@
     "use_proxy": false,
     "cookies": "",
     "video_codecs": "AVC",
-    "video_quality": "_720P"
+    "video_quality": "_720P",
+    "comment_render_enable": true,
+    "comment_limit": 9,
+    "comment_filter_text": true,
+    "comment_filter_qr": false,
+    "comment_qr_check_max": 4
   },
   {
     "__template_key": "douyin",
