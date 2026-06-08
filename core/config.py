@@ -162,6 +162,7 @@ class ParserItem(ConfigNode):
     comment_filter_text: bool | None
     comment_filter_qr: bool | None
     comment_qr_check_max: int | None
+    comment_merge_with_video: bool | None
 
     @property
     def name(self) -> str:

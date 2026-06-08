@@ -91,6 +91,7 @@ class MessageSender:
         *,
         force_merge_override: bool | None = None,
         render_card_override: bool | None = None,
+        preserve_order: bool = False,
     ) -> dict:
         """
         根据解析结果生成发送计划（plan）
@@ -101,7 +102,7 @@ class MessageSender:
         light, heavy = [], []
 
         # 合并主内容 + 转发内容，统一参与发送策略计算
-        iterable = contents if contents is not None else self._iter_contents(result)
+        iterable = list(contents if contents is not None else self._iter_contents(result))
         for cont in iterable:
             match cont:
                 case ImageContent() | GraphicsContent() | TextContent():
@@ -131,6 +132,8 @@ class MessageSender:
             # 预览卡片：仅在“渲染卡片 + 不合并”时独立发送
             "preview_card": render_card and not force_merge,
             "force_merge": force_merge,
+            "preserve_order": preserve_order,
+            "ordered": iterable if preserve_order else [],
         }
 
     async def _send_preview_card(
@@ -153,6 +156,69 @@ class MessageSender:
         if image_path := await self.renderer.render_card(result):
             await event.send(event.chain_result([await self._image_from_path(image_path)]))
 
+    async def _append_content_segments(
+        self,
+        segs: list[BaseMessageComponent],
+        cont,
+        *,
+        inline_images: bool,
+        heavy_mode: bool,
+    ) -> None:
+        """把一个 MediaContent 转成消息段。
+
+        移植说明：preserve_order 分组会混排视频和评论图，所以这里抽出
+        单项转换逻辑，避免保序路径和原轻/重媒体路径出现两套行为。
+        """
+        if not heavy_mode:
+            if isinstance(cont, TextContent):
+                if cont.text:
+                    segs.append(Plain(cont.text))
+                return
+
+            try:
+                path: Path = await cont.get_path()
+            except (DownloadLimitException, ZeroSizeException):
+                return
+            except DownloadException:
+                if self.cfg.show_download_fail_tip:
+                    segs.append(Plain("此项媒体下载失败"))
+                return
+
+            match cont:
+                case ImageContent():
+                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
+                case GraphicsContent() as g:
+                    # OneBot/aiocqhttp 本地文件参数要求 file:// URI，而非裸本地路径。
+                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
+                    # GraphicsContent 允许携带补充文本
+                    if g.text:
+                        segs.append(Plain(g.text))
+                    if g.alt:
+                        segs.append(Plain(g.alt))
+            return
+
+        try:
+            path: Path = await cont.get_path()
+        except SizeLimitException:
+            segs.append(Plain("此项媒体超过大小限制"))
+            return
+        except DownloadException:
+            if self.cfg.show_download_fail_tip:
+                segs.append(Plain("此项媒体下载失败"))
+            return
+
+        match cont:
+            case VideoContent() | DynamicContent():
+                segs.append(Video(self._to_file_uri(path)))
+            case AudioContent():
+                segs.append(
+                    File(name=path.name, file=self._to_file_uri(path))
+                    if self.cfg.audio_to_file
+                    else Record(self._to_file_uri(path))
+                )
+            case FileContent():
+                segs.append(File(name=path.name, file=self._to_file_uri(path)))
+
     async def _build_segments(
         self,
         result: ParseResult,
@@ -173,57 +239,34 @@ class MessageSender:
             if image_path := await self.renderer.render_card(result):
                 segs.append(await self._image_from_path(image_path, inline_bytes=True))
 
+        if plan["preserve_order"]:
+            for cont in plan["ordered"]:
+                heavy_mode = isinstance(cont, (VideoContent, AudioContent, FileContent, DynamicContent))
+                await self._append_content_segments(
+                    segs,
+                    cont,
+                    inline_images=inline_images,
+                    heavy_mode=heavy_mode,
+                )
+            return segs
+
         # 轻媒体处理
         for cont in plan["light"]:
-            if isinstance(cont, TextContent):
-                if cont.text:
-                    segs.append(Plain(cont.text))
-                continue
-
-            try:
-                path: Path = await cont.get_path()
-            except (DownloadLimitException, ZeroSizeException):
-                continue
-            except DownloadException:
-                if self.cfg.show_download_fail_tip:
-                    segs.append(Plain("此项媒体下载失败"))
-                continue
-
-            match cont:
-                case ImageContent():
-                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
-                case GraphicsContent() as g:
-                    # OneBot/aiocqhttp 本地文件参数要求 file:// URI，而非裸本地路径。
-                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
-                    # GraphicsContent 允许携带补充文本
-                    if g.text:
-                        segs.append(Plain(g.text))
-                    if g.alt:
-                        segs.append(Plain(g.alt))
+            await self._append_content_segments(
+                segs,
+                cont,
+                inline_images=inline_images,
+                heavy_mode=False,
+            )
 
         # 重媒体处理
         for cont in plan["heavy"]:
-            try:
-                path: Path = await cont.get_path()
-            except SizeLimitException:
-                segs.append(Plain("此项媒体超过大小限制"))
-                continue
-            except DownloadException:
-                if self.cfg.show_download_fail_tip:
-                    segs.append(Plain("此项媒体下载失败"))
-                continue
-
-            match cont:
-                case VideoContent() | DynamicContent():
-                    segs.append(Video(self._to_file_uri(path)))
-                case AudioContent():
-                    segs.append(
-                        File(name=path.name, file=self._to_file_uri(path))
-                        if self.cfg.audio_to_file
-                        else Record(self._to_file_uri(path))
-                    )
-                case FileContent():
-                    segs.append(File(name=path.name, file=self._to_file_uri(path)))
+            await self._append_content_segments(
+                segs,
+                cont,
+                inline_images=inline_images,
+                heavy_mode=True,
+            )
 
         return segs
 
@@ -280,6 +323,7 @@ class MessageSender:
             group.contents,
             force_merge_override=group.force_merge,
             render_card_override=group.render_card,
+            preserve_order=bool(group.preserve_order),
         )
 
         await self._send_preview_card(event, result, plan)

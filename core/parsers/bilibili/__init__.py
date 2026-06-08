@@ -58,6 +58,8 @@ class BilibiliParser(BaseParser):
         text_filter = self.mycfg.comment_filter_text
         qr_filter = self.mycfg.comment_filter_qr
         qr_check_max = self.mycfg.comment_qr_check_max
+        merge_with_video = self.mycfg.comment_merge_with_video
+        self.comment_merge_with_video = False if merge_with_video is None else bool(merge_with_video)
         self.comment_renderer = BiliCommentRenderer()
         self.comment_service = BiliCommentService(
             parser=self,
@@ -224,14 +226,25 @@ class BilibiliParser(BaseParser):
             video_cover=page_info.cover,
         )
 
-        # 移植说明：第一组保持原版视频发送行为；评论图作为可选第二组。
+        # 移植说明：默认第一组保持原版视频发送行为，评论图作为可选第二组。
+        # 若配置要求同组发送，则使用 preserve_order 保证主视频在评论图前面。
         # 评论抓取/渲染失败会静默跳过，不改变主解析和主下载链路。
         send_groups = []
         if comment_contents:
-            send_groups = [
-                SendGroup(contents=[video_content]),
-                SendGroup(contents=comment_contents, force_merge=True, render_card=False),
-            ]
+            if self.comment_merge_with_video:
+                send_groups = [
+                    SendGroup(
+                        contents=[video_content, *comment_contents],
+                        force_merge=True,
+                        render_card=False,
+                        preserve_order=True,
+                    ),
+                ]
+            else:
+                send_groups = [
+                    SendGroup(contents=[video_content]),
+                    SendGroup(contents=comment_contents, force_merge=True, render_card=False),
+                ]
 
         return self.result(
             url=url,

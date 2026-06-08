@@ -167,6 +167,7 @@ class SendGroup:
     contents: list[MediaContent] = field(default_factory=list)
     force_merge: bool | None = None
     render_card: bool | None = None
+    preserve_order: bool | None = None
 
 
 @dataclass(repr=False, slots=True)
@@ -324,6 +325,7 @@ class ParseResult:
         for group in self.send_groups:
             add(group.force_merge)
             add(group.render_card)
+            add(group.preserve_order)
             add(len(group.contents))
             for cont in group.contents:
                 add(cont.__class__.__name__)

@@ -234,6 +234,12 @@
                             "step": 1
                         },
                         "default": 4
+                    },
+                    "comment_merge_with_video": {
+                        "description": "评论图与主视频同一合并转发",
+                        "hint": "开启后，B站视频和评论区图片会进入同一个合并转发消息；关闭时保持主视频和评论图分开发送。",
+                        "type": "bool",
+                        "default": false
                     }
                 }
             },

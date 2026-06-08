@@ -10,7 +10,8 @@
     "comment_limit": 9,
     "comment_filter_text": true,
     "comment_filter_qr": false,
-    "comment_qr_check_max": 4
+    "comment_qr_check_max": 4,
+    "comment_merge_with_video": false
   },
   {
     "__template_key": "douyin",
