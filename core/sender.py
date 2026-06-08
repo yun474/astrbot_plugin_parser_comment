@@ -1,3 +1,4 @@
+import asyncio
 from itertools import chain
 from pathlib import Path
 
@@ -58,6 +59,26 @@ class MessageSender:
         if not path.is_absolute():
             path = path.resolve()
         return path.as_uri()
+
+    async def _image_from_path(
+        self,
+        path: Path,
+        *,
+        inline_bytes: bool = False,
+    ) -> Image:
+        """构造图片消息段。
+
+        移植说明：OneBot/aiocqhttp 在合并转发 Node 里有时会把 file://
+        本地图片重新解析成相对路径，导致发送阶段报 No such file。合并转发
+        场景下改用 fromBytes 内联图片，避免节点二次取本地文件。
+        """
+        if inline_bytes:
+            try:
+                data = await asyncio.to_thread(path.read_bytes)
+                return Image.fromBytes(data)
+            except Exception as e:
+                logger.debug(f"图片内联失败，回退到 file URI: {path}, {e}")
+        return Image(self._to_file_uri(path))
 
     @staticmethod
     def _iter_contents(result: ParseResult):
@@ -130,7 +151,7 @@ class MessageSender:
             return
 
         if image_path := await self.renderer.render_card(result):
-            await event.send(event.chain_result([Image(self._to_file_uri(image_path))]))
+            await event.send(event.chain_result([await self._image_from_path(image_path)]))
 
     async def _build_segments(
         self,
@@ -145,11 +166,12 @@ class MessageSender:
         - 转换为 AstrBot 消息组件
         """
         segs: list[BaseMessageComponent] = []
+        inline_images = bool(plan["force_merge"])
 
         # 合并转发时，卡片以内联形式作为一个消息段参与合并
         if plan["render_card"] and plan["force_merge"]:
             if image_path := await self.renderer.render_card(result):
-                segs.append(Image(self._to_file_uri(image_path)))
+                segs.append(await self._image_from_path(image_path, inline_bytes=True))
 
         # 轻媒体处理
         for cont in plan["light"]:
@@ -169,10 +191,10 @@ class MessageSender:
 
             match cont:
                 case ImageContent():
-                    segs.append(Image(self._to_file_uri(path)))
+                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
                 case GraphicsContent() as g:
                     # OneBot/aiocqhttp 本地文件参数要求 file:// URI，而非裸本地路径。
-                    segs.append(Image(self._to_file_uri(path)))
+                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
                     # GraphicsContent 允许携带补充文本
                     if g.text:
                         segs.append(Plain(g.text))

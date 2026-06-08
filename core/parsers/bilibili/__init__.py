@@ -230,7 +230,7 @@ class BilibiliParser(BaseParser):
         if comment_contents:
             send_groups = [
                 SendGroup(contents=[video_content]),
-                SendGroup(contents=comment_contents, force_merge=True, render_card=False),
+                SendGroup(contents=comment_contents, force_merge=False, render_card=False),
             ]
 
         return self.result(
