@@ -4,5 +4,5 @@ desc: 高性能低耦合的万能链接解析器。支持的类型：视频、�
 help: 略
 version: v1.5.1
 author: Zhalslar
-repo: https://github.com/Zhalslar/astrbot_plugin_parser
+repo: https://github.com/yun474/astrbot_plugin_parser_comment
 

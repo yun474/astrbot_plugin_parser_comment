@@ -10,7 +10,8 @@ _✨ 链接解析器 ✨_
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-3.4%2B-orange.svg)](https://github.com/Soulter/AstrBot)
-[![GitHub](https://img.shields.io/badge/作者-Zhalslar-blue)](https://github.com/Zhalslar)
+[![GitHub](https://img.shields.io/badge/Fork-yun474-blue)](https://github.com/yun474/astrbot_plugin_parser_comment)
+[![Upstream](https://img.shields.io/badge/上游-Zhalslar-lightgrey)](https://github.com/Zhalslar/astrbot_plugin_parser)
 
 </div>
 
@@ -55,7 +56,9 @@ _✨ 链接解析器 ✨_
 
 ## 💿 安装
 
-直接在astrbot的插件市场搜索astrbot_plugin_parser，点击安装，等待完成即可
+推荐从当前 fork 安装：<https://github.com/yun474/astrbot_plugin_parser_comment>
+
+也可以在astrbot的插件市场搜索astrbot_plugin_parser，点击安装，等待完成即可
 
 ## ⚙️ 配置
 
@@ -121,7 +124,7 @@ _✨ 链接解析器 ✨_
 
 插件支持自定义解析器，通过继承 `BaseParser` 类并实现 `platform`, `handle` 即可。
 
-示例解析器请看 [示例解析器](https://github.com/Zhalslar/astrbot_plugin_parser/blob/main/core/parsers/example.py)
+示例解析器请看 [示例解析器](https://github.com/yun474/astrbot_plugin_parser_comment/blob/main/core/parsers/example.py)
 
 ---
 
