@@ -1,6 +1,6 @@
 import asyncio
 from re import Match
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from bilibili_api import request_settings, select_client
 from bilibili_api.opus import Opus
@@ -190,29 +190,35 @@ class BilibiliParser(BaseParser):
 
         # 视频下载 task
         async def download_video():
-            output_path = self.cfg.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
-            if output_path.exists():
-                return output_path
-            v_url, a_url = await self.extract_download_urls(
-                video=video, page_index=page_info.index
-            )
-            if page_info.duration > self.cfg.max_duration:
-                raise DurationLimitException
-            if a_url is not None:
-                return await self.downloader.download_av_and_merge(
-                    v_url,
-                    a_url,
-                    output_path=output_path,
-                    headers=self.headers,
-                    proxy=self.proxy,
+            try:
+                output_path = self.cfg.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
+                if output_path.exists():
+                    return output_path
+                v_url, a_url = await self.extract_download_urls(
+                    video=video, page_index=page_info.index
                 )
-            else:
-                return await self.downloader.streamd(
-                    v_url,
-                    file_name=output_path.name,
-                    headers=self.headers,
-                    proxy=self.proxy,
-                )
+                if page_info.duration > self.cfg.max_duration:
+                    raise DurationLimitException
+                if a_url is not None:
+                    return await self.downloader.download_av_and_merge(
+                        v_url,
+                        a_url,
+                        output_path=output_path,
+                        headers=self.headers,
+                        proxy=self.proxy,
+                    )
+                else:
+                    return await self.downloader.streamd(
+                        v_url,
+                        file_name=output_path.name,
+                        headers=self.headers,
+                        proxy=self.proxy,
+                    )
+            except DownloadException:
+                raise
+            except Exception as e:
+                logger.warning(f"[Bilibili] 视频下载失败: {e}")
+                raise DownloadException(f"B站媒体下载失败: {e}") from e
 
         video_task = asyncio.create_task(download_video())
         video_content = self.create_video_content(
@@ -461,25 +467,135 @@ class BilibiliParser(BaseParser):
 
         # 获取下载数据
         download_url_data = await video.get_download_url(page_index=page_index)
-        detecter = VideoDownloadURLDataDetecter(download_url_data)
-        streams = detecter.detect_best_streams(
-            video_max_quality=self.video_quality,
-            codecs=self.video_codecs,
-            no_dolby_video=True,
-            no_hdr=True,
-        )
-        video_stream = streams[0]
-        if not isinstance(video_stream, VideoStreamDownloadURL):
-            raise DownloadException("未找到可下载的视频流")
-        logger.debug(
-            f"视频流质量: {video_stream.video_quality.name}, 编码: {video_stream.video_codecs}"
-        )
+        try:
+            detecter = VideoDownloadURLDataDetecter(download_url_data)
+            streams = detecter.detect_best_streams(
+                video_max_quality=self.video_quality,
+                codecs=self.video_codecs,
+                no_dolby_video=True,
+                no_hdr=True,
+            )
+            video_stream = streams[0]
+            if not isinstance(video_stream, VideoStreamDownloadURL):
+                raise DownloadException("未找到可下载的视频流")
+            logger.debug(
+                f"视频流质量: {video_stream.video_quality.name}, 编码: {video_stream.video_codecs}"
+            )
 
-        audio_stream = streams[1]
-        if not isinstance(audio_stream, AudioStreamDownloadURL):
-            return video_stream.url, None
-        logger.debug(f"音频流质量: {audio_stream.audio_quality.name}")
-        return video_stream.url, audio_stream.url
+            audio_stream = streams[1]
+            if not isinstance(audio_stream, AudioStreamDownloadURL):
+                return video_stream.url, None
+            logger.debug(f"音频流质量: {audio_stream.audio_quality.name}")
+            return video_stream.url, audio_stream.url
+        except DownloadException:
+            raise
+        except Exception as e:
+            logger.warning(f"[Bilibili] 官方流选择失败，尝试手动兜底: {e}")
+            return self._extract_download_urls_fallback(download_url_data)
+
+    @staticmethod
+    def _stream_url(item: dict[str, Any]) -> str | None:
+        return item.get("baseUrl") or item.get("base_url") or item.get("url")
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _codec_rank(codec: str, preferred: list[str]) -> int:
+        codec_l = (codec or "").lower()
+        if not codec_l:
+            return len(preferred) + 8
+
+        for idx, name in enumerate(preferred):
+            name_l = name.lower()
+            if name_l == "avc" and ("avc" in codec_l or "avc1" in codec_l):
+                return idx
+            if name_l in {"hev", "hevc"} and ("hev" in codec_l or "hvc" in codec_l):
+                return idx
+            if name_l == "av1" and ("av01" in codec_l or "av1" in codec_l):
+                return idx
+        return len(preferred) + 1
+
+    def _preferred_codec_names(self) -> list[str]:
+        names: list[str] = []
+        for codec in self.video_codecs:
+            name = str(getattr(codec, "name", "") or "").upper()
+            if name:
+                names.append(name)
+            value = str(getattr(codec, "value", "") or "").upper()
+            if value:
+                names.append(value)
+        return names or ["AVC"]
+
+    def _extract_download_urls_fallback(
+        self,
+        data: dict[str, Any],
+    ) -> tuple[str, str | None]:
+        """在 bilibili_api 流选择器遇到异常 payload 时手动挑流。
+
+        移植说明：bilibili_api 的 detect_best_streams 在部分返回里会遇到
+        video_codecs=None 并崩溃。这里只依赖接口原始 dict，优先选择配置范围
+        内的最高画质和偏好编码，保证解析失败时能降级而不是炸出 AttributeError。
+        """
+        dash = data.get("dash") or {}
+        videos = [
+            item
+            for item in dash.get("video") or []
+            if isinstance(item, dict) and self._stream_url(item)
+        ]
+        audios = [
+            item
+            for item in dash.get("audio") or []
+            if isinstance(item, dict) and self._stream_url(item)
+        ]
+
+        if videos:
+            max_quality = self._safe_int(getattr(self.video_quality, "value", 64), 64)
+            preferred_codecs = self._preferred_codec_names()
+
+            def video_score(item: dict[str, Any]) -> tuple[int, int, int, int]:
+                quality = self._safe_int(item.get("id"))
+                within_quality = 0 if quality <= max_quality else 1
+                codec_rank = self._codec_rank(
+                    str(item.get("codecs") or ""),
+                    preferred_codecs,
+                )
+                bandwidth = self._safe_int(item.get("bandwidth"))
+                return (within_quality, codec_rank, -quality, -bandwidth)
+
+            videos.sort(key=video_score)
+            video_url = self._stream_url(videos[0])
+            if not video_url:
+                raise DownloadException("未找到可下载的视频流")
+
+            audio_url = None
+            if audios:
+                audios.sort(
+                    key=lambda item: self._safe_int(item.get("bandwidth")),
+                    reverse=True,
+                )
+                audio_url = self._stream_url(audios[0])
+
+            logger.debug(
+                "[Bilibili] 手动流选择: "
+                f"qn={videos[0].get('id')}, "
+                f"codec={videos[0].get('codecs')}, "
+                f"audio={bool(audio_url)}"
+            )
+            return video_url, audio_url
+
+        durls = data.get("durl") or []
+        if durls and isinstance(durls[0], dict):
+            video_url = durls[0].get("url")
+            if video_url:
+                logger.debug("[Bilibili] 手动流选择: durl")
+                return video_url, None
+
+        raise DownloadException("未找到可下载的视频流")
 
 
 
