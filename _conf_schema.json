@@ -17,6 +17,12 @@
         "type": "bool",
         "default": true
     },
+    "qq_official_mode": {
+        "description": "官 Bot 适配模式",
+        "hint": "使用 QQ 官方机器人适配器时开启。开启后不再使用贴表情仲裁，命中链接后会先发送文字提示；媒体发送不使用 OneBot/NapCat 的合并转发节点，而交给 QQ 官方富媒体接口发送视频。",
+        "type": "bool",
+        "default": false
+    },
     "debounce_interval": {
         "description": "防抖秒数",
         "hint": "防抖机制：同一个会话下，防抖时间内不解析那些已经解析过的链接。设为 0 表示不启用防抖机制",

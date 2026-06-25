@@ -55,6 +55,15 @@ class MessageSender:
         self.cfg = config
         self.renderer = renderer
 
+    def _use_qq_official_mode(self, event: AstrMessageEvent) -> bool:
+        if not self.cfg.qq_official_mode:
+            return False
+        try:
+            platform_name = event.get_platform_name()
+        except Exception:
+            platform_name = getattr(getattr(event, "platform_meta", None), "name", "")
+        return platform_name in {"qq_official", "qq_official_webhook"}
+
     def _to_file_uri(self, path: Path) -> str:
         if not path.is_absolute():
             path = path.resolve()
@@ -318,6 +327,7 @@ class MessageSender:
         result: ParseResult,
         group: SendGroup,
     ) -> bool:
+        qq_official_mode = self._use_qq_official_mode(event)
         plan = self._build_send_plan(
             result,
             group.contents,
@@ -326,10 +336,18 @@ class MessageSender:
             preserve_order=bool(group.preserve_order),
         )
 
+        if qq_official_mode:
+            # QQ 官方机器人不支持 OneBot/NapCat 的合并转发节点。
+            # 保留 Video/Image/File 等标准组件，让 AstrBot 官方适配器按
+            # /v2/groups|users/.../files + msg_type=7 富媒体接口发送。
+            plan["force_merge"] = False
+            plan["preview_card"] = bool(plan["render_card"])
+
         await self._send_preview_card(event, result, plan)
 
         segs = await self._build_segments(result, plan)
-        segs = self._merge_segments_if_needed(event, segs, plan["force_merge"])
+        if not qq_official_mode:
+            segs = self._merge_segments_if_needed(event, segs, plan["force_merge"])
 
         if not segs:
             return False

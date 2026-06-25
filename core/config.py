@@ -200,6 +200,7 @@ class PluginConfig(ConfigNode):
     blacklist: list[str]
 
     arbiter: bool
+    qq_official_mode: bool
     debounce_interval: int
 
     source_max_size: int
@@ -223,6 +224,8 @@ class PluginConfig(ConfigNode):
     _plugin_name = "astrbot_plugin_parser"
 
     def __init__(self, config: AstrBotConfig, context: Context):
+        if "qq_official_mode" not in config:
+            config["qq_official_mode"] = False
         super().__init__(config)
         self.context = context
         self.admins_id = self.context.get_config().get("admins_id", [])

@@ -45,6 +45,14 @@ class ParserPlugin(Star):
         # 关键词 -> 正则 列表
         self.key_pattern_list: list[tuple[str, re.Pattern[str]]] = []
 
+    def _use_qq_official_mode(self, event: AstrMessageEvent) -> bool:
+        if not self.cfg.qq_official_mode:
+            return False
+        try:
+            platform_name = event.get_platform_name()
+        except Exception:
+            platform_name = getattr(getattr(event, "platform_meta", None), "name", "")
+        return platform_name in {"qq_official", "qq_official_webhook"}
 
     async def initialize(self):
         """加载、重载插件时触发"""
@@ -158,9 +166,14 @@ class ParserPlugin(Star):
         if searched is None:
             return
         logger.debug(f"匹配结果: {keyword}, {searched}")
+        qq_official_mode = self._use_qq_official_mode(event)
 
         # 仲裁机制
-        if isinstance(event, AiocqhttpMessageEvent) and not event.is_private_chat():
+        if (
+            not qq_official_mode
+            and isinstance(event, AiocqhttpMessageEvent)
+            and not event.is_private_chat()
+        ):
             raw = event.message_obj.raw_message
             if not isinstance(raw, dict):
                 logger.warning(f"Unexpected raw_message type: {type(raw)}")
@@ -183,6 +196,12 @@ class ParserPlugin(Star):
         if self.debouncer.hit_link(umo, link):
             logger.warning(f"[链接防抖] 链接 {link} 在防抖时间内，跳过解析")
             return
+
+        if qq_official_mode:
+            try:
+                await event.send(event.plain_result("云云帮你发视频，稍等一下哦..."))
+            except Exception as e:
+                logger.warning(f"[QQOfficial] 开始解析提示发送失败: {e}")
 
         # 解析
         parse_res = await self.parser_map[keyword].parse(keyword, searched)
