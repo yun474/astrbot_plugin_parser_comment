@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aiohttp import ClientTimeout
+from curl_cffi.requests import AsyncSession as CurlAsyncSession
 from msgspec import json as msgjson
 
 from astrbot.api import logger
@@ -199,77 +200,115 @@ class BiliCommentService:
         is_end = False
         qr_check_counter = [0]
 
-        for _ in range(self.MAX_FETCH_PAGES):
-            if is_end or len(strict_list) >= self.comment_limit:
-                break
+        headers = self.headers
+        referer = f"https://www.bilibili.com/video/av{oid}"
+        headers["Referer"] = referer
 
-            params = {
-                "oid": oid,
-                "type": type_,
-                "mode": 3,
-                "next": next_cursor,
-                "ps": self.COMMENT_PAGE_SIZE,
-            }
-
+        # B站评论接口会对 aiohttp 的普通 TLS 指纹返回 -352，且 HTTP 状态仍是
+        # 200。项目已依赖 curl_cffi，这里先访问视频页取得 buvid，再复用同一
+        # 浏览器指纹会话抓评论，避免把风控响应误判成“评论区为空”。
+        async with CurlAsyncSession(impersonate="chrome131") as session:
             try:
-                async with self.parser.session.get(
-                    self.API_URL,
-                    params=params,
-                    headers=self.headers,
+                await session.get(
+                    referer,
+                    headers=headers,
                     proxy=self.parser.proxy,
-                    timeout=ClientTimeout(total=self.fetch_timeout),
-                ) as resp:
-                    if resp.status != 200:
-                        break
-                    payload = msgjson.decode(await resp.read())
+                    timeout=self.fetch_timeout,
+                )
+            except Exception as e:
+                logger.debug(f"[Bilibili-comments] 视频页预热失败，继续尝试接口: {e}")
 
-                if payload.get("code") != 0:
+            for _ in range(self.MAX_FETCH_PAGES):
+                if is_end or len(strict_list) >= self.comment_limit:
                     break
 
-                block = payload.get("data") or {}
-                replies = block.get("replies") or []
-                cursor = block.get("cursor") or {}
-                is_end = bool(cursor.get("is_end"))
-                next_cursor = cursor.get("next", next_cursor + 1)
+                params = {
+                    "oid": oid,
+                    "type": type_,
+                    "mode": 3,
+                    "next": next_cursor,
+                    "ps": self.COMMENT_PAGE_SIZE,
+                }
 
-                for item in replies:
-                    rpid = str(item.get("rpid") or "")
-                    if not rpid or rpid in seen:
-                        continue
-                    seen.add(rpid)
-
-                    content = item.get("content") or {}
-                    member = item.get("member") or {}
-                    message = self._clean_message(content.get("message") or "")
-
-                    pics = content.get("pictures") or []
-                    pic_url = self._normalise_url(pics[0].get("img_src")) if pics else None
-                    avatar_url = self._normalise_url(member.get("avatar")) or ""
-
-                    if not message and not pic_url:
-                        continue
-
-                    if await self._should_skip_comment(message, pic_url, qr_check_counter):
-                        continue
-
-                    comment = _RawComment(
-                        rpid=rpid,
-                        uname=str(member.get("uname") or "B站用户"),
-                        avatar_url=avatar_url,
-                        message=message,
-                        pic_url=pic_url,
+                try:
+                    resp = await session.get(
+                        self.API_URL,
+                        params=params,
+                        headers=headers,
+                        proxy=self.parser.proxy,
+                        timeout=self.fetch_timeout,
                     )
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "[Bilibili-comments] 评论接口 HTTP 异常: "
+                            f"status={resp.status_code}, oid={oid}"
+                        )
+                        break
+                    payload = msgjson.decode(resp.content)
 
-                    if "@" in message:
-                        relaxed_list.append(comment)
-                    else:
-                        strict_list.append(comment)
-            except Exception as e:
-                logger.warning(f"[Bilibili-comments] 评论抓取失败: {e}")
-                break
+                    if payload.get("code") != 0:
+                        logger.warning(
+                            "[Bilibili-comments] 评论接口拒绝请求: "
+                            f"code={payload.get('code')}, "
+                            f"message={payload.get('message')}, oid={oid}"
+                        )
+                        break
+
+                    block = payload.get("data") or {}
+                    replies = block.get("replies") or []
+                    cursor = block.get("cursor") or {}
+                    is_end = bool(cursor.get("is_end"))
+                    next_cursor = cursor.get("next", next_cursor + 1)
+
+                    for item in replies:
+                        rpid = str(item.get("rpid") or "")
+                        if not rpid or rpid in seen:
+                            continue
+                        seen.add(rpid)
+
+                        content = item.get("content") or {}
+                        member = item.get("member") or {}
+                        message = self._clean_message(content.get("message") or "")
+
+                        pics = content.get("pictures") or []
+                        pic_url = (
+                            self._normalise_url(pics[0].get("img_src"))
+                            if pics
+                            else None
+                        )
+                        avatar_url = self._normalise_url(member.get("avatar")) or ""
+
+                        if not message and not pic_url:
+                            continue
+
+                        if await self._should_skip_comment(
+                            message,
+                            pic_url,
+                            qr_check_counter,
+                        ):
+                            continue
+
+                        comment = _RawComment(
+                            rpid=rpid,
+                            uname=str(member.get("uname") or "B站用户"),
+                            avatar_url=avatar_url,
+                            message=message,
+                            pic_url=pic_url,
+                        )
+
+                        if "@" in message:
+                            relaxed_list.append(comment)
+                        else:
+                            strict_list.append(comment)
+                except Exception as e:
+                    logger.warning(f"[Bilibili-comments] 评论抓取失败: {e}")
+                    break
 
         if len(strict_list) < self.comment_limit:
             strict_list.extend(relaxed_list[: self.comment_limit - len(strict_list)])
+
+        if not strict_list:
+            logger.warning(f"[Bilibili-comments] 未获取到可渲染评论: oid={oid}")
 
         return strict_list[: self.comment_limit]
 

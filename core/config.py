@@ -163,6 +163,7 @@ class ParserItem(ConfigNode):
     comment_filter_qr: bool | None
     comment_qr_check_max: int | None
     comment_merge_with_video: bool | None
+    nsfw: str | None
 
     @property
     def name(self) -> str:
@@ -184,6 +185,8 @@ class ParserConfig(ConfigNodeContainer):
     zhihu: ParserItem
     xhs: ParserItem
     youtube: ParserItem
+    iwara: ParserItem
+    shipinhao: ParserItem
 
     def __init__(self, nodes: list[dict[str, Any]]):
         super().__init__(nodes, item_cls=ParserItem)

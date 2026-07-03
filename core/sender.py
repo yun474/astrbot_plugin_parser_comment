@@ -55,14 +55,9 @@ class MessageSender:
         self.cfg = config
         self.renderer = renderer
 
-    def _use_qq_official_mode(self, event: AstrMessageEvent) -> bool:
-        if not self.cfg.qq_official_mode:
-            return False
-        try:
-            platform_name = event.get_platform_name()
-        except Exception:
-            platform_name = getattr(getattr(event, "platform_meta", None), "name", "")
-        return platform_name in {"qq_official", "qq_official_webhook"}
+    def _use_qq_official_mode(self, _event: AstrMessageEvent) -> bool:
+        """适配模式由配置直接控制，不再依赖适配器的平台名称。"""
+        return bool(self.cfg.qq_official_mode)
 
     def _to_file_uri(self, path: Path) -> str:
         if not path.is_absolute():
@@ -86,8 +81,16 @@ class MessageSender:
                 data = await asyncio.to_thread(path.read_bytes)
                 return Image.fromBytes(data)
             except Exception as e:
-                logger.debug(f"图片内联失败，回退到 file URI: {path}, {e}")
-        return Image(self._to_file_uri(path))
+                logger.debug(f"图片内联失败，回退到本地文件组件: {path}, {e}")
+        return Image.fromFileSystem(str(path))
+
+    @staticmethod
+    def _video_from_path(path: Path) -> Video:
+        return Video.fromFileSystem(str(path))
+
+    @staticmethod
+    def _record_from_path(path: Path) -> Record:
+        return Record.fromFileSystem(str(path))
 
     @staticmethod
     def _iter_contents(result: ParseResult):
@@ -163,7 +166,16 @@ class MessageSender:
             return
 
         if image_path := await self.renderer.render_card(result):
-            await event.send(event.chain_result([await self._image_from_path(image_path)]))
+            await event.send(
+                event.chain_result(
+                    [
+                        await self._image_from_path(
+                            image_path,
+                            inline_bytes=not self._use_qq_official_mode(event),
+                        )
+                    ]
+                )
+            )
 
     async def _append_content_segments(
         self,
@@ -218,12 +230,12 @@ class MessageSender:
 
         match cont:
             case VideoContent() | DynamicContent():
-                segs.append(Video(self._to_file_uri(path)))
+                segs.append(self._video_from_path(path))
             case AudioContent():
                 segs.append(
                     File(name=path.name, file=self._to_file_uri(path))
                     if self.cfg.audio_to_file
-                    else Record(self._to_file_uri(path))
+                    else self._record_from_path(path)
                 )
             case FileContent():
                 segs.append(File(name=path.name, file=self._to_file_uri(path)))
@@ -232,6 +244,8 @@ class MessageSender:
         self,
         result: ParseResult,
         plan: dict,
+        *,
+        inline_images: bool = True,
     ) -> list[BaseMessageComponent]:
         """
         根据发送计划构建消息段列表
@@ -241,12 +255,15 @@ class MessageSender:
         - 转换为 AstrBot 消息组件
         """
         segs: list[BaseMessageComponent] = []
-        inline_images = True
-
         # 合并转发时，卡片以内联形式作为一个消息段参与合并
         if plan["render_card"] and plan["force_merge"]:
             if image_path := await self.renderer.render_card(result):
-                segs.append(await self._image_from_path(image_path, inline_bytes=True))
+                segs.append(
+                    await self._image_from_path(
+                        image_path,
+                        inline_bytes=inline_images,
+                    )
+                )
 
         if plan["preserve_order"]:
             for cont in plan["ordered"]:
@@ -345,7 +362,11 @@ class MessageSender:
 
         await self._send_preview_card(event, result, plan)
 
-        segs = await self._build_segments(result, plan)
+        segs = await self._build_segments(
+            result,
+            plan,
+            inline_images=not qq_official_mode,
+        )
         if not qq_official_mode:
             segs = self._merge_segments_if_needed(event, segs, plan["force_merge"])
 

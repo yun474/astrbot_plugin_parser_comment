@@ -45,14 +45,9 @@ class ParserPlugin(Star):
         # 关键词 -> 正则 列表
         self.key_pattern_list: list[tuple[str, re.Pattern[str]]] = []
 
-    def _use_qq_official_mode(self, event: AstrMessageEvent) -> bool:
-        if not self.cfg.qq_official_mode:
-            return False
-        try:
-            platform_name = event.get_platform_name()
-        except Exception:
-            platform_name = getattr(getattr(event, "platform_meta", None), "name", "")
-        return platform_name in {"qq_official", "qq_official_webhook"}
+    def _use_qq_official_mode(self, _event: AstrMessageEvent) -> bool:
+        """适配模式由配置直接控制，避免平台名称差异让兼容逻辑失效。"""
+        return bool(self.cfg.qq_official_mode)
 
     async def initialize(self):
         """加载、重载插件时触发"""

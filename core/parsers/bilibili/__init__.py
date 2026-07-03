@@ -467,6 +467,14 @@ class BilibiliParser(BaseParser):
 
         # 获取下载数据
         download_url_data = await video.get_download_url(page_index=page_index)
+        # bilibili-api 17.x 无法识别部分新返回的 hvc1 编码，先归一化为 HEV。
+        for video_data in (download_url_data.get("dash") or {}).get("video") or []:
+            if not isinstance(video_data, dict):
+                continue
+            codecs = video_data.get("codecs", "")
+            if isinstance(codecs, str) and codecs.startswith("hvc1"):
+                video_data["codecs"] = f"hev,{codecs}"
+
         try:
             detecter = VideoDownloadURLDataDetecter(download_url_data)
             streams = detecter.detect_best_streams(
@@ -475,6 +483,8 @@ class BilibiliParser(BaseParser):
                 no_dolby_video=True,
                 no_hdr=True,
             )
+            if not streams:
+                raise DownloadException("官方选择器未找到匹配的视频流")
             video_stream = streams[0]
             if not isinstance(video_stream, VideoStreamDownloadURL):
                 raise DownloadException("未找到可下载的视频流")
@@ -482,13 +492,11 @@ class BilibiliParser(BaseParser):
                 f"视频流质量: {video_stream.video_quality.name}, 编码: {video_stream.video_codecs}"
             )
 
-            audio_stream = streams[1]
+            audio_stream = streams[1] if len(streams) > 1 else None
             if not isinstance(audio_stream, AudioStreamDownloadURL):
                 return video_stream.url, None
             logger.debug(f"音频流质量: {audio_stream.audio_quality.name}")
             return video_stream.url, audio_stream.url
-        except DownloadException:
-            raise
         except Exception as e:
             logger.warning(f"[Bilibili] 官方流选择失败，尝试手动兜底: {e}")
             return self._extract_download_urls_fallback(download_url_data)
