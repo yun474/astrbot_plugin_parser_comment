@@ -1,26 +1,26 @@
+import hashlib
+from datetime import datetime
+from pathlib import Path
 from re import Match
 from typing import ClassVar
-import hashlib
+from urllib.parse import parse_qs, urlparse
+
 from curl_cffi import requests as curl_requests
-from urllib.parse import urlparse, parse_qs
-from datetime import datetime
 from PIL import Image, ImageFilter
-from pathlib import Path
 
 from ..config import PluginConfig
-from ..data import ParseResult, Platform, VideoContent, ImageContent, TextContent
+from ..data import ImageContent, ParseResult, Platform, TextContent, VideoContent
 from ..download import Downloader
-from .base import BaseParser, handle
 from ..exception import ParseException
+from .base import BaseParser, handle
 
 _IMPERSONATE = "chrome120"
 IWARA_SALT = "_mSvL05GfEmeEmsEYfGCnVpEjYgTJraJN"
 
-class api:
 
+class api:
     cookie = ""
     proxy: str | None = None
-
 
     @staticmethod
     def _get_iwara_xversion(fileURL: str) -> str:
@@ -61,9 +61,7 @@ class api:
     async def fileURL_get_urlInfo(fileURL: str) -> dict:
         """根据fileURL获取视频链接json"""
         x_version = api._get_iwara_xversion(fileURL)
-        headers = {
-            "x-version": x_version
-        }
+        headers = {"x-version": x_version}
         async with curl_requests.AsyncSession(
             timeout=10.0,
             impersonate=_IMPERSONATE,
@@ -105,20 +103,26 @@ class api:
         return url
 
     @staticmethod
-    def auto_blur_video_thumbnail(video_thumbnail: Path, rating: str, config: str) -> Path | None:
+    def auto_blur_video_thumbnail(
+        video_thumbnail: Path, rating: str, config: str
+    ) -> Path | None:
         """判断是否要增加模糊，需要提供封面、rating和设置"""
         if rating == "ecchi":
             if config == "send":
                 return video_thumbnail
             else:
-                output_path = video_thumbnail.parent / f"{video_thumbnail.stem}_blur{video_thumbnail.suffix}"
+                output_path = (
+                    video_thumbnail.parent
+                    / f"{video_thumbnail.stem}_blur{video_thumbnail.suffix}"
+                )
                 return api._blur(video_thumbnail, output_path)
         else:
             return video_thumbnail
 
-
     @staticmethod
-    def _blur(image_path: str | Path, output_path: str | Path | None = None, radius: int = 20) -> Path:
+    def _blur(
+        image_path: str | Path, output_path: str | Path | None = None, radius: int = 20
+    ) -> Path:
         """对图片施加全局高斯模糊
 
         Args:
@@ -158,11 +162,7 @@ class api:
                 raise ParseException(f"获取iwara图片信息失败：{e}")
 
 
-
-
-
 class IwaraParser(BaseParser):
-
     platform: ClassVar[Platform] = Platform(name="iwara", display_name="iwara")
 
     def __init__(self, config: PluginConfig, downloader: Downloader):
@@ -184,14 +184,16 @@ class IwaraParser(BaseParser):
         video_user_username = video_info["user"]["username"]
         video_upload_time = video_info["updatedAt"]
         video_thumbnail = api.videoInfo_Get_Thumbnail(video_info)
-        timestamp = int(datetime.fromisoformat(video_upload_time.replace("Z", "+00:00")).timestamp())
+        timestamp = int(
+            datetime.fromisoformat(video_upload_time.replace("Z", "+00:00")).timestamp()
+        )
         video_duration = video_info["file"]["duration"]
         user_avatar = video_info["user"]["avatar"]
         r18 = video_info["rating"]
         video_user_avatar_imgurl = (
-            f"https://i.iwara.tv/image/avatar/{user_avatar['id']}/{user_avatar['name']}" # 获取用户头像
+            f"https://i.iwara.tv/image/avatar/{user_avatar['id']}/{user_avatar['name']}"  # 获取用户头像
             if user_avatar
-            else "https://www.iwara.tv/images/default-avatar.jpg" # iwara 默认头像
+            else "https://www.iwara.tv/images/default-avatar.jpg"  # iwara 默认头像
         )
 
         if r18 == "ecchi" and self.mycfg.nsfw == "ignore":
@@ -202,7 +204,9 @@ class IwaraParser(BaseParser):
             )
 
         img_path = await self.downloader.download_img(video_thumbnail, proxy=self.proxy)
-        video_thumbnail_img = api.auto_blur_video_thumbnail(img_path, r18, self.mycfg.nsfw or "blur")
+        video_thumbnail_img = api.auto_blur_video_thumbnail(
+            img_path, r18, self.mycfg.nsfw or "blur"
+        )
 
         # 获取视频下载链接
         quality = self.mycfg.video_quality if self.mycfg.video_quality else "Source"
@@ -214,22 +218,22 @@ class IwaraParser(BaseParser):
         send_info = f"视频描述: {video_body}\n\nTAG: {', '.join(f'#{tag}' for tag in video_tags)}"
 
         video_contents = VideoContent(
-            path_task = self.downloader.download_video(video_url),
-            cover = video_thumbnail_img if video_thumbnail_img else None,
-            duration = video_duration,
-            )
+            path_task=self.downloader.download_video(video_url),
+            cover=video_thumbnail_img if video_thumbnail_img else None,
+            duration=video_duration,
+        )
 
         author = self.create_author(
             name=f"{video_user} ({video_user_username})",
             avatar_url=video_user_avatar_imgurl,
         )
         return self.result(
-            title = video_title,
-            text = send_info,
+            title=video_title,
+            text=send_info,
             author=author,
             timestamp=timestamp,
             contents=[video_contents],
-            url=f"https://www.iwara.tv/video/{video_id}"
+            url=f"https://www.iwara.tv/video/{video_id}",
         )
 
     @handle("iwara.tv/image", r"iwara\.tv/image/(?P<image_id>\w+)")
@@ -253,9 +257,11 @@ class IwaraParser(BaseParser):
 
         # 提取图片URL列表
         image_urls = []
-        if image_rating == "ecchi" and self.mycfg.nsfw == "blur": # R18且模糊时下载压缩后的图片，省流量
+        if (
+            image_rating == "ecchi" and self.mycfg.nsfw == "blur"
+        ):  # R18且模糊时下载压缩后的图片，省流量
             for img_item in image_info["files"]:
-                name = Path(img_item['name']).with_suffix('.jpg').name
+                name = Path(img_item["name"]).with_suffix(".jpg").name
                 img_url = f"https://i.iwara.tv/image/large/{img_item['id']}/{name}"
                 image_urls.append(img_url)
         else:
@@ -268,9 +274,9 @@ class IwaraParser(BaseParser):
         user_username = image_info["user"]["username"]
         user_avatar = image_info["user"]["avatar"]
         user_avatar_imgurl = (
-            f"https://i.iwara.tv/image/avatar/{user_avatar['id']}/{user_avatar['name']}" # 获取用户头像
+            f"https://i.iwara.tv/image/avatar/{user_avatar['id']}/{user_avatar['name']}"  # 获取用户头像
             if user_avatar
-            else "https://www.iwara.tv/images/default-avatar.jpg" # iwara 默认头像
+            else "https://www.iwara.tv/images/default-avatar.jpg"  # iwara 默认头像
         )
 
         # 构建发送信息
@@ -281,19 +287,23 @@ class IwaraParser(BaseParser):
         image_contents = []
         for img_url in image_urls:
             img_path = await self.downloader.download_img(img_url, proxy=self.proxy)
-            img = api.auto_blur_video_thumbnail(img_path, image_rating, self.mycfg.nsfw or "blur")
+            img = api.auto_blur_video_thumbnail(
+                img_path, image_rating, self.mycfg.nsfw or "blur"
+            )
             if img:
-                image_contents.append(ImageContent(
-                    path_task = img,
-                ))
+                image_contents.append(
+                    ImageContent(
+                        path_task=img,
+                    )
+                )
 
         author = self.create_author(
             name=f"{user_name} ({user_username})",
             avatar_url=user_avatar_imgurl,
         )
         return self.result(
-            title = image_title,
-            author = author,
-            contents = [text, *image_contents],
-            url=f"https://www.iwara.tv/image/{image_id}"
+            title=image_title,
+            author=author,
+            contents=[text, *image_contents],
+            url=f"https://www.iwara.tv/image/{image_id}",
         )
