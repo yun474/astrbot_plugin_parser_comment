@@ -204,6 +204,7 @@ class PluginConfig(ConfigNode):
 
     arbiter: bool
     qq_official_mode: bool
+    llm_tool_mode: bool
     debounce_interval: int
 
     source_max_size: int
@@ -229,6 +230,8 @@ class PluginConfig(ConfigNode):
     def __init__(self, config: AstrBotConfig, context: Context):
         if "qq_official_mode" not in config:
             config["qq_official_mode"] = False
+        if "llm_tool_mode" not in config:
+            config["llm_tool_mode"] = False
         super().__init__(config)
         self.context = context
         self.admins_id = self.context.get_config().get("admins_id", [])

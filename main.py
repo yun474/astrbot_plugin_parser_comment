@@ -1,6 +1,7 @@
 # main.py
 
 import asyncio
+import json
 import re
 
 from astrbot.api import logger
@@ -25,6 +26,8 @@ from .core.utils import extract_json_url
 
 
 class ParserPlugin(Star):
+    LLM_TOOL_NAME = "parse_media_link"
+
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.cfg = PluginConfig(config, context=context)
@@ -55,6 +58,7 @@ class ParserPlugin(Star):
         await asyncio.to_thread(Renderer.load_resources)
         # 注册解析器
         self._register_parser()
+        self._sync_llm_tool_state()
 
     async def terminate(self):
         """插件卸载时触发"""
@@ -114,9 +118,107 @@ class ParserPlugin(Star):
                 return parser
         raise ValueError(f"未找到类型为 {parser_type} 的 parser 实例")
 
+    def _sync_llm_tool_state(self) -> None:
+        """让工具是否暴露给 LLM 与模式开关保持一致。"""
+        setter_name = (
+            "activate_llm_tool" if self.cfg.llm_tool_mode else "deactivate_llm_tool"
+        )
+        setter = getattr(self.context, setter_name, None)
+        if not callable(setter):
+            logger.warning(f"[LLMTool] 当前 AstrBot 不支持 {setter_name}")
+            return
+        try:
+            if not setter(self.LLM_TOOL_NAME):
+                logger.warning(f"[LLMTool] 未找到工具: {self.LLM_TOOL_NAME}")
+        except Exception as e:
+            logger.warning(f"[LLMTool] 同步工具状态失败: {e}")
+
+    def _match_link(self, text: str) -> tuple[str, re.Match[str]] | None:
+        """按与消息监听相同的规则查找解析器。"""
+        for keyword, pattern in self.key_pattern_list:
+            if keyword not in text:
+                continue
+            if searched := pattern.search(text):
+                return keyword, searched
+        return None
+
+    def _session_denied_reason(self, event: AstrMessageEvent) -> str | None:
+        umo = event.unified_msg_origin
+        if self.cfg.whitelist and umo not in self.cfg.whitelist:
+            return "当前会话不在解析白名单中"
+        if self.cfg.blacklist and umo in self.cfg.blacklist:
+            return "当前会话已关闭解析"
+        return None
+
+    @staticmethod
+    def _tool_result(success: bool, message: str, **extra) -> str:
+        return json.dumps(
+            {"success": success, "message": message, **extra},
+            ensure_ascii=False,
+        )
+
+    @filter.llm_tool(name=LLM_TOOL_NAME)
+    async def parse_media_link(self, event: AstrMessageEvent, link: str) -> str:
+        """解析媒体链接，并将视频或图片直接发送到当前会话。
+
+        Args:
+            link(string): 用户要求解析的完整媒体链接
+        """
+        if not self.cfg.llm_tool_mode:
+            return self._tool_result(False, "LLM 工具模式未开启")
+
+        if denied_reason := self._session_denied_reason(event):
+            return self._tool_result(False, denied_reason)
+
+        text = str(link or "").strip()
+        if not text:
+            return self._tool_result(False, "未提供媒体链接")
+
+        matched = self._match_link(text)
+        if matched is None:
+            return self._tool_result(False, "没有匹配到已启用的链接解析器")
+
+        keyword, searched = matched
+        matched_link = searched.group(0)
+        umo = event.unified_msg_origin
+        if self.debouncer.hit_link(umo, matched_link):
+            return self._tool_result(False, "链接处于防抖时间内，未重复解析")
+
+        try:
+            parse_res = await self.parser_map[keyword].parse(keyword, searched)
+            resource_id = parse_res.get_resource_id()
+            if self.debouncer.hit_resource(umo, resource_id):
+                return self._tool_result(False, "资源处于防抖时间内，未重复发送")
+
+            sent = await self.sender.send_parse_result(
+                event,
+                parse_res,
+                direct_media=True,
+            )
+            if not sent:
+                return self._tool_result(
+                    False,
+                    "解析完成，但没有可发送的媒体或消息发送失败",
+                    platform=parse_res.platform.display_name,
+                )
+
+            return self._tool_result(
+                True,
+                "解析成功，媒体已直接发送到当前会话",
+                platform=parse_res.platform.display_name,
+                title=parse_res.title or "",
+                url=parse_res.url or matched_link,
+            )
+        except Exception as e:
+            logger.warning(f"[LLMTool] 解析失败: link={matched_link}, error={e}")
+            return self._tool_result(False, f"解析失败: {e}", url=matched_link)
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """消息的统一入口"""
+        if self.cfg.llm_tool_mode:
+            return
+
         umo = event.unified_msg_origin
 
         # 白名单
@@ -150,16 +252,10 @@ class ParserPlugin(Star):
             return
 
         # 核心匹配逻辑 ：关键词 + 正则双重判定，汇集了所有解析器的正则对。
-        keyword: str = ""
-        searched: re.Match[str] | None = None
-        for kw, pat in self.key_pattern_list:
-            if kw not in text:
-                continue
-            if m := pat.search(text):
-                keyword, searched = kw, m
-                break
-        if searched is None:
+        matched = self._match_link(text)
+        if matched is None:
             return
+        keyword, searched = matched
         logger.debug(f"匹配结果: {keyword}, {searched}")
         qq_official_mode = self._use_qq_official_mode(event)
 

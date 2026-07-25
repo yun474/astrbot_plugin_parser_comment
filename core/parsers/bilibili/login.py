@@ -2,10 +2,9 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator
 
+from astrbot.api import logger
 from bilibili_api import Credential
 from bilibili_api.login_v2 import QrCodeLogin, QrCodeLoginEvents
-
-from astrbot.api import logger
 
 from ...config import PluginConfig
 
@@ -96,7 +95,8 @@ class BilibiliLogin:
 
         if self._credential is None:
             await self._init_credential()
-            return self._credential
+        if self._credential is None:
+            return None
 
         if not await self._credential.check_valid():
             logger.warning("哔哩哔哩凭证已过期, 请重新配置")

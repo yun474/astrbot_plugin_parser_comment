@@ -9,7 +9,7 @@ _✨ 链接解析器 ✨_
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![AstrBot](https://img.shields.io/badge/AstrBot-3.4%2B-orange.svg)](https://github.com/Soulter/AstrBot)
+[![AstrBot](https://img.shields.io/badge/AstrBot-4.5.1%2B-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
 [![GitHub](https://img.shields.io/badge/Fork-yun474-blue)](https://github.com/yun474/astrbot_plugin_parser_comment)
 [![Upstream](https://img.shields.io/badge/上游-Zhalslar-lightgrey)](https://github.com/Zhalslar/astrbot_plugin_parser)
 
@@ -74,6 +74,19 @@ _✨ 链接解析器 ✨_
 - 完全禁用合并转发节点，即使达到转发阈值或解析器要求强制合并，也不会构造 `Nodes`。
 - 视频、图片等媒体仍使用标准消息组件发送，由 AstrBot QQ 官方适配器按官方富媒体接口上传并发送。
 
+### LLM 工具模式
+
+开启 `LLM 工具模式` 后，插件只提供 `parse_media_link` 工具，不再监听普通消息主动解析：
+
+- 普通消息中的链接不会触发解析、贴表情仲裁或“开始解析”提示。
+- LLM 调用工具并传入完整链接后才开始解析。
+- 视频、图片等媒体使用标准消息组件直接发送到当前会话，不包装进 LLM 工具结果或合并转发节点。
+- 工具向 LLM 返回 JSON 格式的成功状态、平台、标题及失败原因。
+
+### B站评论区
+
+B站访客态评论接口目前通常只返回 3 条，并会把分页标记为结束。若要按 `comment_limit` 获取更多评论，请填写有效的 B站 Cookie，或使用 `登录B站` 命令扫码登录。扫码凭证会自动用于评论接口。
+
 ## 🎉 指令
 
 |   指令   |         权限          |        说明        |
@@ -107,6 +120,7 @@ _✨ 链接解析器 ✨_
    - 通过固定表情进行 Bot 间仲裁  
    - 未胜出的 Bot 自动放弃解析
    - 若开启官 Bot 适配模式，则跳过贴表情仲裁并发送文字提示
+   - 若开启 LLM 工具模式，则普通消息入口直接退出，不执行仲裁或提示
 
 5. **防抖判定（Link Debouncer）**  
    - 对同一会话内的相同链接进行时间窗口限制  

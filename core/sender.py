@@ -343,6 +343,8 @@ class MessageSender:
         event: AstrMessageEvent,
         result: ParseResult,
         group: SendGroup,
+        *,
+        direct_media: bool = False,
     ) -> bool:
         qq_official_mode = self._use_qq_official_mode(event)
         plan = self._build_send_plan(
@@ -353,10 +355,10 @@ class MessageSender:
             preserve_order=bool(group.preserve_order),
         )
 
-        if qq_official_mode:
+        if qq_official_mode or direct_media:
             # QQ 官方机器人不支持 OneBot/NapCat 的合并转发节点。
-            # 保留 Video/Image/File 等标准组件，让 AstrBot 官方适配器按
-            # /v2/groups|users/.../files + msg_type=7 富媒体接口发送。
+            # LLM 工具模式也必须把 Video/Image/File 等标准组件直接发到
+            # 当前会话，不能把媒体包装进工具返回值或合并转发节点。
             plan["force_merge"] = False
             plan["preview_card"] = bool(plan["render_card"])
 
@@ -401,7 +403,9 @@ class MessageSender:
         self,
         event: AstrMessageEvent,
         result: ParseResult,
-    ):
+        *,
+        direct_media: bool = False,
+    ) -> bool:
         """
         发送解析结果的统一入口
 
@@ -416,17 +420,28 @@ class MessageSender:
 
         sent = False
         for group in groups:
-            sent = await self._send_group(event, result, group) or sent
+            sent = (
+                await self._send_group(
+                    event,
+                    result,
+                    group,
+                    direct_media=direct_media,
+                )
+                or sent
+            )
 
         if not sent:
             segs = self._build_text_fallback(result)
             if not segs:
                 logger.warning("发送结果为空，不执行发送")
-                return
+                return False
 
             try:
                 await event.send(event.chain_result(segs))
+                return True
             except Exception as e:
                 seg_meta = self._collect_seg_meta(segs)
                 logger.error(f"发送解析结果失败： error={e}, segments={seg_meta}")
-            return
+                return False
+
+        return True
