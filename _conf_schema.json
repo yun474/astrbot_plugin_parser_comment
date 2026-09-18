@@ -57,6 +57,22 @@
         "type": "bool",
         "default": false
     },
+    "render_engine": {
+        "description": "HTML 渲染引擎",
+        "hint": "B站视频海报和评论区图片用 HTML 模板渲染。自动：优先本地 Playwright（首次使用会自动下载约 150 MB 的 Chromium，Linux 缺系统库时请手动执行 playwright install --with-deps chromium），不可用时退回 AstrBot 自带的网络文转图接口；也可以强制指定其中一种。",
+        "type": "string",
+        "options": [
+            "auto",
+            "playwright",
+            "astrbot"
+        ],
+        "labels": [
+            "自动（优先本地 Playwright）",
+            "本地 Playwright",
+            "AstrBot 网络渲染"
+        ],
+        "default": "auto"
+    },
     "debounce_interval": {
         "description": "防抖秒数",
         "hint": "防抖机制：同一个会话下，防抖时间内不解析那些已经解析过的链接。设为 0 表示不启用防抖机制",
@@ -235,9 +251,21 @@
                         ],
                         "default": "_720P"
                     },
+                    "poster_render_enable": {
+                        "description": "渲染视频海报",
+                        "hint": "开启后，B站视频解析会先发一张海报：封面、标题、UP 主、播放 / 弹幕 / 点赞 / 投币 / 收藏 / 转发 / 评论数据和简介，随后再发视频。渲染失败会退回默认卡片。",
+                        "type": "bool",
+                        "default": true
+                    },
                     "comment_render_enable": {
                         "description": "渲染评论区图片",
-                        "hint": "开启后，B站视频解析会额外发送一张评论区精选图片；主视频解析失败与否不依赖评论区渲染。",
+                        "hint": "开启后，B站视频解析会额外发送一张 B站原生风格的评论区图片（含楼中楼）；主视频解析失败与否不依赖评论区渲染。",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "comment_show_replies": {
+                        "description": "评论区显示楼中楼",
+                        "hint": "每条热评下方展示接口返回的前几条回复（与 B站网页一致，通常 3 条），关闭后只展示一级评论。",
                         "type": "bool",
                         "default": true
                     },

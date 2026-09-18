@@ -69,6 +69,8 @@ class ParserPlugin(Star):
         unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
             await parser.close_session()
+        # 关 HTML 渲染用的浏览器
+        await BaseParser.close_html_renderer()
         # 关缓存清理器
         await self.cleaner.stop()
 
@@ -214,12 +216,18 @@ class ParserPlugin(Star):
             logger.warning(f"[LLMTool] 解析失败: link={matched_link}, error={e}")
             return self._tool_result(False, f"解析失败: {e}", url=matched_link)
 
+    @staticmethod
+    def _extract_card_url(chain: list) -> str | None:
+        """从消息链里的分享卡片 (小程序 / 结构化消息) 提取链接, 兼容 @ + 卡片的组合"""
+        for seg in chain:
+            if isinstance(seg, Json) and (url := extract_json_url(seg.data)):
+                logger.debug(f"解析Json组件: {url}")
+                return url
+        return None
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """消息的统一入口"""
-        if self.cfg.llm_tool_mode:
-            return
-
         umo = event.unified_msg_origin
 
         # 白名单
@@ -236,13 +244,13 @@ class ParserPlugin(Star):
             return
 
         seg1 = chain[0]
-        text = event.message_str
+        card_url = self._extract_card_url(chain)
+        # LLM 工具模式只认工具调用, 但 LLM 看不见分享卡片, 所以卡片直接唤醒解析
+        card_wakeup = bool(self.cfg.llm_tool_mode and card_url)
+        if self.cfg.llm_tool_mode and not card_wakeup:
+            return
 
-        # 卡片解析：解析Json组件，提取URL
-        if isinstance(seg1, Json):
-            text = extract_json_url(seg1.data)
-            logger.debug(f"解析Json组件: {text}")
-
+        text = card_url or event.message_str
         if not text:
             return
 
@@ -260,9 +268,10 @@ class ParserPlugin(Star):
         logger.debug(f"匹配结果: {keyword}, {searched}")
         qq_official_mode = self._use_qq_official_mode(event)
 
-        # 仲裁机制
+        # 仲裁机制 (官 Bot 模式和卡片唤醒的 LLM 工具模式都不贴表情)
         if (
             not qq_official_mode
+            and not card_wakeup
             and isinstance(event, AiocqhttpMessageEvent)
             and not event.is_private_chat()
         ):
@@ -289,7 +298,7 @@ class ParserPlugin(Star):
             logger.warning(f"[链接防抖] 链接 {link} 在防抖时间内，跳过解析")
             return
 
-        if qq_official_mode:
+        if qq_official_mode and not card_wakeup:
             try:
                 await event.send(event.plain_result("云云帮你发视频，稍等一下哦..."))
             except Exception as e:
@@ -314,8 +323,8 @@ class ParserPlugin(Star):
             logger.warning(f"[资源防抖] 资源 {resource_id} 在防抖时间内，跳过发送")
             return
 
-        # 发送
-        await self.sender.send_parse_result(event, parse_res)
+        # 发送 (卡片唤醒沿用 LLM 工具模式的直发媒体策略)
+        await self.sender.send_parse_result(event, parse_res, direct_media=card_wakeup)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("开启解析")

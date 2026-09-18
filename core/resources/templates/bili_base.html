@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face {
+  font-family: "PluginFont";
+  src: url("{{ font_url }}");
+}
+:root {
+  --brand: #FB7299;
+  --blue: #00AEEC;
+  --text1: #18191C;
+  --text2: #61666D;
+  --text3: #9499A0;
+  --line: #E3E5E7;
+  --bg: #F1F2F3;
+  --bg2: #F6F7F8;
+}
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  width: fit-content;
+}
+* { box-sizing: border-box; }
+#root {
+  width: {{ width }}px;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text1);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Source Han Sans SC", "PluginFont", "Helvetica Neue", Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.card {
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .06);
+}
+.avatar {
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  background: var(--bg2);
+}
+.avatar-fallback {
+  border-radius: 50%;
+  flex: none;
+  background: var(--blue);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+.icon {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon.fill { fill: currentColor; stroke: none; }
+.tag {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 5px;
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.tag-up { background: var(--brand); color: #fff; font-weight: 600; }
+.tag-top { border: 1px solid var(--blue); color: var(--blue); line-height: 14px; }
+.tag-honor { background: var(--bg2); color: var(--text2); border: 1px solid var(--line); }
+.brand {
+  color: var(--brand);
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+{% block style %}{% endblock %}
+</style>
+</head>
+<body>
+<div id="root">
+{% block body %}{% endblock %}
+</div>
+</body>
+</html>

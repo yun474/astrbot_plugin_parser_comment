@@ -65,6 +65,15 @@ class VideoInfo(Struct):
     """封面图片"""
     pages: list[Page] | None = None
     """分集信息"""
+    tname: str = ""
+    """分区"""
+    honor_reply: dict | None = None
+    """荣誉信息, 如 热门收录 / 全站排行榜"""
+
+    @property
+    def honors(self) -> list[str]:
+        honor = (self.honor_reply or {}).get("honor") or []
+        return [str(h["desc"]) for h in honor if h.get("desc")]
 
     @property
     def title_with_part(self) -> str:
@@ -116,7 +125,7 @@ class VideoInfo(Struct):
             page = self.pages[page_idx]
             title += f" | 分集 - {page.part}"
             duration = page.duration
-            cover = page.first_frame
+            cover = page.first_frame or self.pic
             timestamp = page.ctime
 
         return PageInfo(

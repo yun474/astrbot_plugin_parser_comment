@@ -426,7 +426,12 @@ class Renderer:
         return image
 
     async def render_card(self, result: ParseResult) -> Path | None:
-        """渲染卡片并落盘，失败返回 None"""
+        """渲染卡片并落盘，失败返回 None; 解析器自带的卡片优先"""
+        if result.card is not None:
+            try:
+                return await result.get_card_path()
+            except Exception as e:
+                logger.warning(f"解析器自带卡片渲染失败, 改用默认卡片: {e}")
         cache = self.cfg.cache_dir / f"card_{uuid.uuid4().hex}.png"
         try:
             img = await self._create_card_image(result)

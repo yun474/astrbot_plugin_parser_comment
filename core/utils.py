@@ -1,10 +1,11 @@
 import asyncio
 import hashlib
 import json
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from astrbot.api import logger
 
@@ -209,15 +210,58 @@ def generate_file_name(url: str, default_suffix: str = "") -> str:
     return file_name
 
 
+URL_RE = re.compile(r"https?://[^\s\"'<>\\]+")
+
+# 卡片里明确表示跳转目标的字段, 按优先级排列
+_CARD_URL_PATHS = (
+    ("miniapp", "legacyUrl"),
+    ("miniapp", "pcJumpUrl"),
+    ("miniapp", "jumpUrl"),
+    ("miniapp", "sourceUrl"),
+    ("miniapp", "url"),
+    ("detail_1", "qqdocurl"),
+    ("detail_1", "jumpUrl"),
+    ("detail_1", "url"),
+    ("detail_1", "sourceUrl"),
+    ("detail_1", "shareUrl"),
+    ("detail_1", "targetUrl"),
+    ("news", "jumpUrl"),
+    ("news", "url"),
+    ("news", "sourceUrl"),
+    ("news", "shareUrl"),
+    ("music", "musicUrl"),
+    ("music", "jumpUrl"),
+    ("music", "url"),
+)
+
+# 深层扫描时优先挑这些平台的链接, 避免先命中卡片里的图标 / 预览图地址
+_PREFERRED_HOSTS = (
+    "b23.tv",
+    "bili2233.cn",
+    "bilibili.com",
+    "xhslink.cn",
+    "xhslink.com",
+    "xiaohongshu.com",
+)
+
+
+def _iter_strings(obj: Any):
+    if isinstance(obj, dict):
+        for value in obj.values():
+            yield from _iter_strings(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _iter_strings(item)
+    elif isinstance(obj, str):
+        yield obj
+
+
+def _clean_embedded_url(value: str) -> str:
+    return unquote(value.strip().replace("\\/", "/"))
+
+
 def extract_json_url(data: dict | str) -> str | None:
-    """处理 JSON 类型的消息段，提取 URL
-
-    Args:
-        data: JSON 类型的消息字典
-
-    Returns:
-        Optional[str]: 提取的 URL, 如果提取失败则返回 None
-    """
+    """从 JSON 卡片消息段 (小程序 / 结构化消息 / 音乐卡) 里提取可交给解析器的 URL"""
     if isinstance(data, str):
         try:
             data = json.loads(data)
@@ -227,16 +271,26 @@ def extract_json_url(data: dict | str) -> str | None:
     if not isinstance(data, dict):
         return None
 
-    meta: dict[str, Any] | None = data.get("meta")
-    if not meta:
-        return None
+    meta = data.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
 
-    for key1, key2 in (
-        ("music", "musicUrl"),
-        ("detail_1", "qqdocurl"),
-        ("news", "jumpUrl"),
-        ("music", "jumpUrl"),
-    ):
-        if url := meta.get(key1, {}).get(key2):
-            return url
-    return None
+    for key1, key2 in _CARD_URL_PATHS:
+        node = meta.get(key1)
+        value = node.get(key2) if isinstance(node, dict) else None
+        if isinstance(value, str) and (
+            match := URL_RE.search(_clean_embedded_url(value))
+        ):
+            return match.group(0)
+
+    # 部分卡片把真实链接藏在更深的字段里, 兜底扫一遍所有字符串
+    candidates = [
+        match.group(0)
+        for value in _iter_strings(data)
+        for match in URL_RE.finditer(_clean_embedded_url(value))
+    ]
+    for host in _PREFERRED_HOSTS:
+        for url in candidates:
+            if host in url:
+                return url
+    return candidates[0] if candidates else None

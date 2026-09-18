@@ -5,7 +5,6 @@ import hashlib
 import re
 import time
 import urllib.parse
-from dataclasses import dataclass
 from pathlib import Path
 
 from aiohttp import ClientTimeout
@@ -15,7 +14,8 @@ from msgspec import json as msgjson
 
 from ...data import ImageContent
 from ...exception import DownloadLimitException
-from .comment_renderer import BiliCommentRenderer, BiliCommentRenderItem
+from .comment_renderer import BiliComment, BiliCommentRenderer
+from .common import bfs_thumb
 
 MIXIN_KEY_ENC_TAB = [
     46,
@@ -85,17 +85,6 @@ MIXIN_KEY_ENC_TAB = [
 ]
 
 
-@dataclass(slots=True)
-class _RawComment:
-    rpid: str
-    uname: str
-    avatar_url: str
-    message: str
-    pic_url: str | None = None
-    avatar_path: Path | None = None
-    pic_path: Path | None = None
-
-
 class BiliCommentService:
     """Fetch, filter, and render Bilibili comments.
 
@@ -122,11 +111,13 @@ class BiliCommentService:
         enable_text_ad_filter: bool = True,
         enable_qr_filter: bool = False,
         qr_check_max: int = 4,
+        show_replies: bool = True,
         fetch_timeout: float = 8.0,
     ):
         self.parser = parser
         self.renderer = renderer
         self.enabled = enabled
+        self.show_replies = show_replies
         self.comment_limit = max(0, min(int(comment_limit or 0), 20))
         self.enable_text_ad_filter = enable_text_ad_filter
         self.enable_qr_filter = enable_qr_filter
@@ -214,7 +205,7 @@ class BiliCommentService:
             if resp.status_code != 200:
                 return None
             payload = msgjson.decode(resp.content)
-            wbi_img = ((payload.get("data") or {}).get("wbi_img") or {})
+            wbi_img = (payload.get("data") or {}).get("wbi_img") or {}
             img_key = self._wbi_key_part(wbi_img.get("img_url"))
             sub_key = self._wbi_key_part(wbi_img.get("sub_url"))
             raw_key = f"{img_key or ''}{sub_key or ''}"
@@ -241,9 +232,7 @@ class BiliCommentService:
             filtered[key] = value
 
         query = urllib.parse.urlencode(sorted(filtered.items()))
-        filtered["w_rid"] = hashlib.md5(
-            f"{query}{mixin_key}".encode()
-        ).hexdigest()
+        filtered["w_rid"] = hashlib.md5(f"{query}{mixin_key}".encode()).hexdigest()
         return filtered
 
     async def _get_comment_json(
@@ -367,6 +356,7 @@ class BiliCommentService:
         *,
         video_title: str,
         video_cover: str | None,
+        up_name: str = "",
     ) -> list[ImageContent]:
         if not self.enabled or self.comment_limit <= 0:
             return []
@@ -377,6 +367,7 @@ class BiliCommentService:
                 type_,
                 video_title=video_title,
                 video_cover=video_cover,
+                up_name=up_name,
             ),
             name=f"bili_comment_render_{oid}",
         )
@@ -401,9 +392,9 @@ class BiliCommentService:
 
     @staticmethod
     def _clean_message(raw_msg: str) -> str:
-        message = re.sub(r"\[.*?\]", "", raw_msg or "").strip()
+        message = (raw_msg or "").strip()
         if len(message) > 320:
-            message = f"{message[:320].rstrip()}..."
+            message = f"{message[:320].rstrip()}…"
         return message
 
     async def _has_qr_in_image(self, img_url: str) -> bool:
@@ -468,17 +459,80 @@ class BiliCommentService:
 
         return False
 
-    async def _fetch_comments(self, oid: int, type_: int) -> list[_RawComment]:
-        strict_list: list[_RawComment] = []
-        relaxed_list: list[_RawComment] = []
+    def _parse_reply(
+        self, item: dict, upper_mid: int, *, is_top: bool = False
+    ) -> BiliComment | None:
+        """把接口的一条评论 (含楼中楼预览) 转成渲染用结构, 空评论返回 None"""
+        rpid = str(item.get("rpid") or item.get("rpid_str") or "")
+        content = item.get("content") or {}
+        member = item.get("member") or {}
+        message = self._clean_message(content.get("message") or "")
+        pics = [
+            url
+            for pic in content.get("pictures") or []
+            if (url := self._normalise_url(pic.get("img_src")))
+        ]
+        if not rpid or (not message and not pics):
+            return None
+
+        emotes = {}
+        for text, emote in (content.get("emote") or {}).items():
+            if url := self._normalise_url(emote.get("url")):
+                emotes[text] = (url, int((emote.get("meta") or {}).get("size") or 1))
+        mid = int(item.get("mid") or 0)
+        control = item.get("reply_control") or {}
+        return BiliComment(
+            rpid=rpid,
+            mid=mid,
+            uname=str(member.get("uname") or "B站用户"),
+            message=message,
+            avatar_url=self._normalise_url(member.get("avatar")) or "",
+            level=int((member.get("level_info") or {}).get("current_level") or 0),
+            vip=(member.get("vip") or {}).get("vipStatus") == 1,
+            like=int(item.get("like") or 0),
+            ctime=int(item.get("ctime") or 0),
+            location=str(control.get("location") or ""),
+            is_up=bool(upper_mid) and mid == upper_mid,
+            is_top=is_top,
+            up_liked=bool((item.get("up_action") or {}).get("like")),
+            rcount=int(item.get("rcount") or 0),
+            pic_urls=pics,
+            emotes=emotes,
+            has_at=bool(content.get("at_name_to_mid")),
+        )
+
+    def _parse_sub_replies(self, item: dict, upper_mid: int) -> list[BiliComment]:
+        subs = []
+        for sub in item.get("replies") or []:
+            comment = self._parse_reply(sub, upper_mid)
+            if comment is None:
+                continue
+            if self.enable_text_ad_filter and self._is_ad_like_text(comment.message):
+                continue
+            subs.append(comment)
+        return subs
+
+    async def _fetch_comments(
+        self, oid: int, type_: int
+    ) -> tuple[list[BiliComment], int]:
+        """抓热评, 返回 (评论列表, 评论总数)"""
+        strict_list: list[BiliComment] = []
+        relaxed_list: list[BiliComment] = []
         seen: set[str] = set()
         next_cursor = 0
         is_end = False
+        all_count = 0
         qr_check_counter = [0]
 
         headers, authenticated = await self._build_request_headers()
         referer = f"https://www.bilibili.com/video/av{oid}"
         headers["Referer"] = referer
+
+        def enough() -> bool:
+            return (
+                len(strict_list) >= self.comment_limit
+                or len(strict_list) + len(relaxed_list) >= self.comment_limit
+            )
 
         # B站评论接口会对 aiohttp 的普通 TLS 指纹返回 -352，且 HTTP 状态仍是
         # 200。项目已依赖 curl_cffi，这里先访问视频页取得 buvid，再复用同一
@@ -495,12 +549,7 @@ class BiliCommentService:
                 logger.debug(f"[Bilibili-comments] 视频页预热失败，继续尝试接口: {e}")
 
             for _ in range(self.MAX_FETCH_PAGES):
-                candidate_count = len(strict_list) + len(relaxed_list)
-                if (
-                    is_end
-                    or len(strict_list) >= self.comment_limit
-                    or candidate_count >= self.comment_limit
-                ):
+                if is_end or enough():
                     break
 
                 try:
@@ -514,10 +563,9 @@ class BiliCommentService:
                     if not block:
                         break
 
-                    replies = [
-                        *(block.get("top_replies") or []),
-                        *(block.get("replies") or []),
-                    ]
+                    upper_mid = int((block.get("upper") or {}).get("mid") or 0)
+                    top_replies = block.get("top_replies") or []
+                    replies = [*top_replies, *(block.get("replies") or [])]
                     cursor = block.get("cursor") or {}
                     is_end = bool(cursor.get("is_end"))
                     try:
@@ -529,11 +577,7 @@ class BiliCommentService:
                         all_count = int(cursor.get("all_count") or 0)
                     except (TypeError, ValueError):
                         all_count = 0
-                    if (
-                        is_end
-                        and all_count > len(replies)
-                        and len(replies) <= 4
-                    ):
+                    if is_end and all_count > len(replies) and len(replies) <= 4:
                         login_state = "登录态仍受限" if authenticated else "访客态"
                         logger.warning(
                             "[Bilibili-comments] "
@@ -541,52 +585,33 @@ class BiliCommentService:
                             f"实际评论数 {all_count}，oid={oid}"
                         )
 
-                    for item in replies:
-                        rpid = str(item.get("rpid") or item.get("rpid_str") or "")
-                        if not rpid or rpid in seen:
-                            continue
-                        seen.add(rpid)
-
-                        content = item.get("content") or {}
-                        member = item.get("member") or {}
-                        message = self._clean_message(content.get("message") or "")
-
-                        pics = content.get("pictures") or []
-                        pic_url = (
-                            self._normalise_url(pics[0].get("img_src"))
-                            if pics
-                            else None
+                    for index, item in enumerate(replies):
+                        comment = self._parse_reply(
+                            item, upper_mid, is_top=index < len(top_replies)
                         )
-                        avatar_url = self._normalise_url(member.get("avatar")) or ""
-
-                        if not message and not pic_url:
+                        if comment is None or comment.rpid in seen:
                             continue
+                        seen.add(comment.rpid)
 
                         if await self._should_skip_comment(
-                            message,
-                            pic_url,
+                            comment.message,
+                            comment.pic_urls[0] if comment.pic_urls else None,
                             qr_check_counter,
                         ):
                             continue
 
-                        comment = _RawComment(
-                            rpid=rpid,
-                            uname=str(member.get("uname") or "B站用户"),
-                            avatar_url=avatar_url,
-                            message=message,
-                            pic_url=pic_url,
-                        )
+                        if self.show_replies:
+                            comment.replies = self._parse_sub_replies(item, upper_mid)
 
-                        if "@" in message:
+                        # 带 @ 的评论多半是在回别人, 往后排; 置顶和 UP 主的除外
+                        if "@" in comment.message and not (
+                            comment.is_top or comment.is_up
+                        ):
                             relaxed_list.append(comment)
                         else:
                             strict_list.append(comment)
 
-                        candidate_count = len(strict_list) + len(relaxed_list)
-                        if (
-                            len(strict_list) >= self.comment_limit
-                            or candidate_count >= self.comment_limit
-                        ):
+                        if enough():
                             break
                 except Exception as e:
                     logger.warning(f"[Bilibili-comments] 评论抓取失败: {e}")
@@ -598,7 +623,7 @@ class BiliCommentService:
         if not strict_list:
             logger.warning(f"[Bilibili-comments] 未获取到可渲染评论: oid={oid}")
 
-        return strict_list[: self.comment_limit]
+        return strict_list[: self.comment_limit], all_count
 
     async def _download_image(self, url: str | None) -> Path | None:
         url = self._normalise_url(url)
@@ -616,34 +641,44 @@ class BiliCommentService:
 
     async def _attach_assets(
         self,
-        comments: list[_RawComment],
+        comments: list[BiliComment],
         video_cover: str | None,
     ) -> Path | None:
-        cover_task = self._download_image(video_cover)
-        asset_jobs = []
-        for comment in comments:
-            asset_jobs.append(("avatar", comment, self._download_image(comment.avatar_url)))
-            if comment.pic_url:
-                asset_jobs.append(("pic", comment, self._download_image(comment.pic_url)))
+        """并发下载封面、头像、配图和表情, 下载失败的图直接不画"""
+        jobs: list[tuple[str, BiliComment, str, str]] = []
+        for root in comments:
+            for comment in root.iter_all():
+                jobs.append(
+                    ("avatar", comment, "", bfs_thumb(comment.avatar_url, "96w_96h_1c"))
+                )
+                spec = "480w" if len(comment.pic_urls) == 1 else "240w_240h_1c"
+                for url in comment.pic_urls[:9]:
+                    jobs.append(("pic", comment, "", bfs_thumb(url, spec)))
+                for text, (url, _) in comment.emotes.items():
+                    jobs.append(("emote", comment, text, url))
 
-        cover_result, asset_results = await asyncio.gather(
-            cover_task,
-            asyncio.gather(*(job[2] for job in asset_jobs), return_exceptions=True),
+        cover_path, results = await asyncio.gather(
+            self._download_image(video_cover),
+            asyncio.gather(*(self._download_image(job[3]) for job in jobs)),
         )
-
-        for (kind, comment, _), result in zip(asset_jobs, asset_results):
-            if not isinstance(result, Path):
+        for (kind, comment, key, _), path in zip(jobs, results):
+            if path is None:
                 continue
             if kind == "avatar":
-                comment.avatar_path = result
+                comment.avatar_path = path
             elif kind == "pic":
-                comment.pic_path = result
-
-        return cover_result if isinstance(cover_result, Path) else None
+                comment.pic_paths.append(path)
+            else:
+                comment.emote_paths[key] = path
+        return cover_path
 
     @staticmethod
-    def _cache_key(oid: int, comments: list[_RawComment], limit: int) -> str:
-        seed = "|".join(f"{c.rpid}:{c.message}:{c.pic_url or ''}" for c in comments)
+    def _cache_key(oid: int, comments: list[BiliComment], limit: int) -> str:
+        seed = "|".join(
+            f"{c.rpid}:{c.like}:{len(c.replies)}"
+            for root in comments
+            for c in root.iter_all()
+        )
         return hashlib.md5(f"{oid}:{limit}:{seed}".encode("utf-8")).hexdigest()[:10]
 
     async def _build_comment_image(
@@ -653,31 +688,27 @@ class BiliCommentService:
         *,
         video_title: str,
         video_cover: str | None,
+        up_name: str,
     ) -> Path:
         try:
-            comments = await self._fetch_comments(oid, type_)
+            comments, total = await self._fetch_comments(oid, type_)
             if not comments:
                 raise DownloadLimitException("评论区为空或不可见")
 
-            cache_name = f"bili_comments_{oid}_{self._cache_key(oid, comments, self.comment_limit)}.png"
-            out_path = self.parser.cfg.cache_dir / cache_name
+            cache_key = self._cache_key(oid, comments, self.comment_limit)
+            out_path = (
+                self.parser.cfg.cache_dir / f"bili_comments_{oid}_{cache_key}.jpg"
+            )
             if out_path.exists() and out_path.stat().st_size > 100:
                 return out_path
 
             cover_path = await self._attach_assets(comments, video_cover)
-            render_items = [
-                BiliCommentRenderItem(
-                    uname=c.uname,
-                    message=c.message,
-                    avatar_path=c.avatar_path,
-                    pic_path=c.pic_path,
-                )
-                for c in comments
-            ]
-            return await self.renderer.render_merged_comments(
-                out_path=out_path,
-                comments=render_items,
-                video_title=video_title,
+            return await self.renderer.render(
+                out_path,
+                comments,
+                title=video_title,
+                up_name=up_name,
+                total=total,
                 cover_path=cover_path,
             )
         except DownloadLimitException:

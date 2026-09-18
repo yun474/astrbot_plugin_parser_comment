@@ -27,6 +27,9 @@ from ..data import (
 from ..download import Downloader
 from ..exception import ParseException, RedirectException
 
+if TYPE_CHECKING:
+    from ..html_render import HtmlRenderer
+
 T = TypeVar("T", bound="BaseParser")
 HandlerFunc = Callable[[T, Match[str]], Coroutine[Any, Any, ParseResult]]
 KeyPatterns = list[tuple[str, Pattern[str]]]
@@ -62,6 +65,9 @@ class BaseParser:
 
     platform: ClassVar[Platform]
     """ 平台信息（包含名称和显示名称） """
+
+    _html_renderer: ClassVar["HtmlRenderer | None"] = None
+    """ 所有解析器共用的 HTML 渲染器 (一个浏览器进程), 首次用到时创建 """
 
     if TYPE_CHECKING:
         _key_patterns: ClassVar[KeyPatterns]
@@ -112,6 +118,20 @@ class BaseParser:
     def get_all_subclass(cls) -> list[type["BaseParser"]]:
         """获取所有已注册的 Parser 类"""
         return cls._registry
+
+    @property
+    def html_renderer(self) -> "HtmlRenderer":
+        if BaseParser._html_renderer is None:
+            from ..html_render import HtmlRenderer
+
+            BaseParser._html_renderer = HtmlRenderer(self.cfg)
+        return BaseParser._html_renderer
+
+    @classmethod
+    async def close_html_renderer(cls) -> None:
+        if cls._html_renderer is not None:
+            await cls._html_renderer.close()
+            cls._html_renderer = None
 
     @property
     def session(self) -> ClientSession:

@@ -194,8 +194,8 @@ class ParseResult:
     """额外信息"""
     repost: "ParseResult | None" = None
     """转发的内容"""
-    render_image: Path | None = None
-    """渲染图片"""
+    card: Path | Task[Path] | None = None
+    """解析器自带的预览卡片 (如 B站海报), 有则替代默认渲染的卡片"""
     _resource_id: str | None = field(init=False, repr=False)
     """资源 ID"""
 
@@ -212,6 +212,12 @@ class ParseResult:
     @property
     def display_url(self) -> str | None:
         return f"链接: {self.url}" if self.url else None
+
+    async def get_card_path(self) -> Path | None:
+        if self.card is None or isinstance(self.card, Path):
+            return self.card
+        self.card = await self.card
+        return self.card
 
     @property
     def repost_display_url(self) -> str | None:
@@ -276,7 +282,7 @@ class ParseResult:
             f"contents: {self.contents}, "
             f"extra: {self.extra}, "
             f"repost: <<<<<<<{self.repost}>>>>>>, "
-            f"render_image: {self.render_image.name if self.render_image else 'None'}"
+            f"card: {repr_path_task(self.card) if self.card else 'None'}"
         )
 
     def __post_init__(self):
@@ -359,3 +365,4 @@ class ParseResultKwargs(TypedDict, total=False):
     author: Author | None
     extra: dict[str, Any]
     repost: ParseResult | None
+    card: Path | Task[Path] | None

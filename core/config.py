@@ -178,6 +178,8 @@ class ParserItem(ConfigNode):
     comment_filter_qr: bool | None
     comment_qr_check_max: int | None
     comment_merge_with_video: bool | None
+    comment_show_replies: bool | None
+    poster_render_enable: bool | None
     nsfw: str | None
 
     @property
@@ -223,6 +225,7 @@ class PluginConfig(ConfigNode):
     qq_official_lowest_quality: bool
     image_merge_threshold: int
     llm_tool_mode: bool
+    render_engine: str
     debounce_interval: int
 
     source_max_size: int
@@ -252,6 +255,7 @@ class PluginConfig(ConfigNode):
         config.setdefault("qq_official_lowest_quality", True)
         config.setdefault("image_merge_threshold", 4)
         config.setdefault("llm_tool_mode", False)
+        config.setdefault("render_engine", "auto")
         super().__init__(config)
         self.context = context
         self.admins_id = self.context.get_config().get("admins_id", [])

@@ -41,9 +41,8 @@ def comment_module(monkeypatch: pytest.MonkeyPatch):
         {},
     )
 
-    renderer_module = types.ModuleType("core.parsers.bilibili.comment_renderer")
-    renderer_module.BiliCommentRenderer = type("BiliCommentRenderer", (), {})
-    renderer_module.BiliCommentRenderItem = type("BiliCommentRenderItem", (), {})
+    config_module = types.ModuleType("core.config")
+    config_module.PluginConfig = object
 
     aiohttp_module = types.ModuleType("aiohttp")
     aiohttp_module.ClientTimeout = type(
@@ -60,17 +59,20 @@ def comment_module(monkeypatch: pytest.MonkeyPatch):
         "core.parsers.bilibili": bilibili_pkg,
         "core.data": data_module,
         "core.exception": exception_module,
-        "core.parsers.bilibili.comment_renderer": renderer_module,
+        "core.config": config_module,
         "aiohttp": aiohttp_module,
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
 
-    monkeypatch.delitem(
-        sys.modules,
+    for name in (
+        "core.utils",
+        "core.html_render",
+        "core.parsers.bilibili.common",
+        "core.parsers.bilibili.comment_renderer",
         "core.parsers.bilibili.comment_service",
-        raising=False,
-    )
+    ):
+        monkeypatch.delitem(sys.modules, name, raising=False)
     module = importlib.import_module("core.parsers.bilibili.comment_service")
     return module, warnings
 
@@ -172,9 +174,11 @@ def test_fetch_comments_includes_top_replies(comment_module, monkeypatch):
     monkeypatch.setattr(service, "_build_request_headers", fake_headers)
     monkeypatch.setattr(service, "_fetch_comment_page", fake_page)
 
-    comments = asyncio.run(service._fetch_comments(123, 1))
+    comments, total = asyncio.run(service._fetch_comments(123, 1))
 
     assert [comment.rpid for comment in comments] == ["top", "1", "3", "2"]
+    assert total == 4
+    assert comments[0].is_top and not comments[1].is_top
 
 
 def test_legacy_page_normalization_keeps_total_count(comment_module):

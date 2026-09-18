@@ -21,6 +21,7 @@ from ..base import (
 from .comment_renderer import BiliCommentRenderer
 from .comment_service import BiliCommentService
 from .login import BilibiliLogin
+from .poster import BiliPosterRenderer
 
 # 选择客户端
 select_client("curl_cffi")
@@ -55,26 +56,24 @@ class BilibiliParser(BaseParser):
             for c in (self.mycfg.video_codec_list or ["AVC"])
         ]
         self.login = BilibiliLogin(config)
-        # 移植说明：R版评论区渲染只挂在这个 service 后面。后续跟原版
-        # 上游同步时，通常只需要保留本初始化块和 parse_video 的发送分组接线。
-        comment_enabled = self.mycfg.comment_render_enable
-        comment_limit = self.mycfg.comment_limit
-        text_filter = self.mycfg.comment_filter_text
-        qr_filter = self.mycfg.comment_filter_qr
-        qr_check_max = self.mycfg.comment_qr_check_max
-        merge_with_video = self.mycfg.comment_merge_with_video
-        self.comment_merge_with_video = (
-            False if merge_with_video is None else bool(merge_with_video)
+        # 海报和评论区都是 HTML 模板渲染, 共用解析器基类里的浏览器
+        self.poster = (
+            BiliPosterRenderer(self.html_renderer, config.cache_dir, config.timezone)
+            if self.mycfg.poster_render_enable is not False
+            else None
         )
-        self.comment_renderer = BiliCommentRenderer()
+        self.comment_merge_with_video = bool(self.mycfg.comment_merge_with_video)
+        comment_limit = self.mycfg.comment_limit
+        qr_check_max = self.mycfg.comment_qr_check_max
         self.comment_service = BiliCommentService(
             parser=self,
-            renderer=self.comment_renderer,
-            enabled=True if comment_enabled is None else bool(comment_enabled),
+            renderer=BiliCommentRenderer(self.html_renderer, config.timezone),
+            enabled=self.mycfg.comment_render_enable is not False,
             comment_limit=9 if comment_limit is None else int(comment_limit),
-            enable_text_ad_filter=True if text_filter is None else bool(text_filter),
-            enable_qr_filter=False if qr_filter is None else bool(qr_filter),
+            enable_text_ad_filter=self.mycfg.comment_filter_text is not False,
+            enable_qr_filter=bool(self.mycfg.comment_filter_qr),
             qr_check_max=4 if qr_check_max is None else int(qr_check_max),
+            show_replies=self.mycfg.comment_show_replies is not False,
         )
 
     @handle("b23.tv", r"b23\.tv/[A-Za-z\d\._?%&+\-=/#]+")
@@ -232,33 +231,52 @@ class BilibiliParser(BaseParser):
             page_info.cover,
             page_info.duration,
         )
+        poster_task = None
+        if self.poster is not None:
+            poster_task = asyncio.create_task(
+                self.poster.render(
+                    video_info,
+                    page_info,
+                    cover=video_content.cover,
+                    avatar=author.avatar,
+                    url=url,
+                    ai_summary=ai_summary,
+                ),
+                name=f"bili_poster_{video_info.bvid}",
+            )
+            # 发送链路异常时可能没人 await 它, 标记异常已取回, 别让 asyncio 刷屏
+            poster_task.add_done_callback(lambda t: t.cancelled() or t.exception())
         comment_contents = self.comment_service.build_comment_image_content(
             video_info.aid,
             video_title=page_info.title,
             video_cover=page_info.cover,
+            up_name=video_info.owner.name,
         )
 
-        # 移植说明：默认第一组保持原版视频发送行为，评论图作为可选第二组。
-        # 若配置要求同组发送，则使用 preserve_order 保证主视频在评论图前面。
-        # 评论抓取/渲染失败会静默跳过，不改变主解析和主下载链路。
-        send_groups = []
-        if comment_contents:
-            if self.comment_merge_with_video:
-                send_groups = [
-                    SendGroup(
-                        contents=[video_content, *comment_contents],
-                        force_merge=True,
-                        render_card=False,
-                        preserve_order=True,
-                    ),
-                ]
-            else:
-                send_groups = [
-                    SendGroup(contents=[video_content]),
+        # 有海报时: 海报先单独发出来, 视频紧随其后, 不塞进合并转发里藏起来;
+        # 没海报时沿用原版的默认发送策略。评论图默认作为第二组合并转发。
+        main_group = SendGroup(
+            contents=[video_content],
+            force_merge=False if poster_task else None,
+            render_card=True if poster_task else None,
+        )
+        if comment_contents and self.comment_merge_with_video:
+            send_groups = [
+                SendGroup(
+                    contents=[video_content, *comment_contents],
+                    force_merge=True,
+                    render_card=main_group.render_card,
+                    preserve_order=True,
+                ),
+            ]
+        else:
+            send_groups = [main_group]
+            if comment_contents:
+                send_groups.append(
                     SendGroup(
                         contents=comment_contents, force_merge=True, render_card=False
-                    ),
-                ]
+                    )
+                )
 
         return self.result(
             url=url,
@@ -268,6 +286,7 @@ class BilibiliParser(BaseParser):
             author=author,
             contents=[video_content],
             send_groups=send_groups,
+            card=poster_task,
             extra={"info": ai_summary},
         )
 
