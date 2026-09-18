@@ -1,5 +1,3 @@
-from random import choice
-
 from msgspec import Struct, field
 
 
@@ -43,20 +41,19 @@ class SlidesData(Struct):
         return self.author.nickname
 
     @property
-    def avatar_url(self) -> str:
-        return choice(self.author.avatar_thumb.url_list)
+    def avatar_url(self) -> str | None:
+        url_list = self.author.avatar_thumb.url_list
+        return url_list[0] if url_list else None
 
     @property
-    def image_urls(self) -> list[str]:
-        return [choice(image.url_list) for image in self.images]
+    def image_url_lists(self) -> list[list[str]]:
+        """每张图片的镜像地址列表, 顺序即优先级"""
+        return [image.url_list for image in self.images]
 
     @property
-    def dynamic_urls(self) -> list[str]:
-        return [
-            choice(image.video.play_addr.url_list)
-            for image in self.images
-            if image.video
-        ]
+    def dynamic_url_lists(self) -> list[list[str]]:
+        """每段动图视频的镜像地址列表"""
+        return [image.video.play_addr.url_list for image in self.images if image.video]
 
 
 class SlidesInfo(Struct):

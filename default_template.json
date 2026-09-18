@@ -17,7 +17,8 @@
     "__template_key": "douyin",
     "enable": true,
     "use_proxy": false,
-    "cookies": ""
+    "cookies": "",
+    "video_quality": "1080p"
   },
   {
     "__template_key": "kuaishou",

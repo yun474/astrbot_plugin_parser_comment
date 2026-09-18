@@ -30,6 +30,7 @@ from .data import (
 from .exception import (
     DownloadException,
     DownloadLimitException,
+    DurationLimitException,
     SizeLimitException,
     ZeroSizeException,
 )
@@ -96,6 +97,19 @@ class MessageSender:
     def _iter_contents(result: ParseResult):
         return chain(result.contents, result.repost.contents if result.repost else ())
 
+    def _download_fail_tip(self, exc: DownloadException) -> Plain | None:
+        """下载失败提示，带上具体原因方便用户定位问题"""
+        if not self.cfg.show_download_fail_tip:
+            return None
+        match exc:
+            case SizeLimitException():
+                text = "此项媒体超过大小限制"
+            case DurationLimitException():
+                text = "此项媒体超过时长限制"
+            case _:
+                text = f"此项{exc.message}"
+        return Plain(text)
+
     def _build_send_plan(
         self,
         result: ParseResult,
@@ -114,7 +128,9 @@ class MessageSender:
         light, heavy = [], []
 
         # 合并主内容 + 转发内容，统一参与发送策略计算
-        iterable = list(contents if contents is not None else self._iter_contents(result))
+        iterable = list(
+            contents if contents is not None else self._iter_contents(result)
+        )
         for cont in iterable:
             match cont:
                 case ImageContent() | GraphicsContent() | TextContent():
@@ -200,17 +216,21 @@ class MessageSender:
                 path: Path = await cont.get_path()
             except (DownloadLimitException, ZeroSizeException):
                 return
-            except DownloadException:
-                if self.cfg.show_download_fail_tip:
-                    segs.append(Plain("此项媒体下载失败"))
+            except DownloadException as e:
+                if tip := self._download_fail_tip(e):
+                    segs.append(tip)
                 return
 
             match cont:
                 case ImageContent():
-                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
+                    segs.append(
+                        await self._image_from_path(path, inline_bytes=inline_images)
+                    )
                 case GraphicsContent() as g:
                     # OneBot/aiocqhttp 本地文件参数要求 file:// URI，而非裸本地路径。
-                    segs.append(await self._image_from_path(path, inline_bytes=inline_images))
+                    segs.append(
+                        await self._image_from_path(path, inline_bytes=inline_images)
+                    )
                     # GraphicsContent 允许携带补充文本
                     if g.text:
                         segs.append(Plain(g.text))
@@ -220,12 +240,9 @@ class MessageSender:
 
         try:
             path: Path = await cont.get_path()
-        except SizeLimitException:
-            segs.append(Plain("此项媒体超过大小限制"))
-            return
-        except DownloadException:
-            if self.cfg.show_download_fail_tip:
-                segs.append(Plain("此项媒体下载失败"))
+        except DownloadException as e:
+            if tip := self._download_fail_tip(e):
+                segs.append(tip)
             return
 
         match cont:
@@ -267,7 +284,9 @@ class MessageSender:
 
         if plan["preserve_order"]:
             for cont in plan["ordered"]:
-                heavy_mode = isinstance(cont, (VideoContent, AudioContent, FileContent, DynamicContent))
+                heavy_mode = isinstance(
+                    cont, (VideoContent, AudioContent, FileContent, DynamicContent)
+                )
                 await self._append_content_segments(
                     segs,
                     cont,
@@ -333,6 +352,32 @@ class MessageSender:
         text = "\n".join(line for line in lines if line).strip()
         return [Plain(text)] if text else []
 
+    async def _merge_gallery(self, contents: list) -> list:
+        """图片超过阈值时拼成一张图，只在没有合并转发可用的模式下调用"""
+        threshold = int(self.cfg.image_merge_threshold or 0)
+        images = [cont for cont in contents if isinstance(cont, ImageContent)]
+        if threshold <= 0 or len(images) <= threshold:
+            return contents
+
+        paths: list[Path] = []
+        for cont in images:
+            try:
+                paths.append(await cont.get_path())
+            except DownloadException as e:
+                logger.warning(f"图集拼图跳过一张下载失败的图片: {e.message}")
+        collage = await self.renderer.render_gallery(paths) if paths else None
+        if collage is None:
+            return contents
+
+        logger.info(f"图集 {len(paths)} 张图片已拼成一张发送")
+        merged: list = []
+        for cont in contents:
+            if not isinstance(cont, ImageContent):
+                merged.append(cont)
+            elif cont is images[0]:
+                merged.append(ImageContent(collage))
+        return merged
+
     def _resolve_groups(self, result: ParseResult) -> list[SendGroup]:
         if result.send_groups:
             return result.send_groups
@@ -347,9 +392,12 @@ class MessageSender:
         direct_media: bool = False,
     ) -> bool:
         qq_official_mode = self._use_qq_official_mode(event)
+        contents = group.contents
+        if qq_official_mode or direct_media:
+            contents = await self._merge_gallery(contents)
         plan = self._build_send_plan(
             result,
-            group.contents,
+            contents,
             force_merge_override=group.force_merge,
             render_card_override=group.render_card,
             preserve_order=bool(group.preserve_order),

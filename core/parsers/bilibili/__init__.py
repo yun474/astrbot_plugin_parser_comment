@@ -43,8 +43,12 @@ class BilibiliParser(BaseParser):
             }
         )
 
-        self.video_quality = getattr(
-            VideoQuality, str(self.mycfg.video_quality).upper(), VideoQuality._720P
+        self.video_quality = (
+            VideoQuality._360P
+            if self.cfg.force_lowest_quality
+            else getattr(
+                VideoQuality, str(self.mycfg.video_quality).upper(), VideoQuality._720P
+            )
         )
         self.video_codecs = [
             getattr(VideoCodecs, str(c).upper(), VideoCodecs.AVC)
@@ -59,7 +63,9 @@ class BilibiliParser(BaseParser):
         qr_filter = self.mycfg.comment_filter_qr
         qr_check_max = self.mycfg.comment_qr_check_max
         merge_with_video = self.mycfg.comment_merge_with_video
-        self.comment_merge_with_video = False if merge_with_video is None else bool(merge_with_video)
+        self.comment_merge_with_video = (
+            False if merge_with_video is None else bool(merge_with_video)
+        )
         self.comment_renderer = BiliCommentRenderer()
         self.comment_service = BiliCommentService(
             parser=self,
@@ -249,7 +255,9 @@ class BilibiliParser(BaseParser):
             else:
                 send_groups = [
                     SendGroup(contents=[video_content]),
-                    SendGroup(contents=comment_contents, force_merge=True, render_card=False),
+                    SendGroup(
+                        contents=comment_contents, force_merge=True, render_card=False
+                    ),
                 ]
 
         return self.result(
@@ -604,4 +612,3 @@ class BilibiliParser(BaseParser):
                 return video_url, None
 
         raise DownloadException("未找到可下载的视频流")
-

@@ -269,6 +269,12 @@ class Renderer:
     IMAGE_GRID_COLS = 3
     """图片网格列数"""
 
+    # 图集拼图配置
+    GALLERY_WIDTH = 1800
+    """拼图总宽度"""
+    GALLERY_GAP = 8
+    """拼图图片间距"""
+
     # 转发内容配置
     REPOST_PADDING = 12
     """转发内容内边距"""
@@ -435,6 +441,64 @@ class Renderer:
                 f"Failed to render card for result={result}",
             )
             return None
+
+    async def render_gallery(self, paths: list[Path]) -> Path | None:
+        """把多张图片按原比例拼成一张长图并落盘，失败返回 None
+
+        给官 Bot 这类不能合并转发的场景用：图集只占一条消息。
+        """
+        out = self.cfg.cache_dir / f"gallery_{uuid.uuid4().hex}.jpg"
+        try:
+            image = await asyncio.to_thread(self._compose_gallery, paths)
+            await asyncio.to_thread(image.save, out, format="JPEG", quality=88)
+            return out
+        except Exception as e:
+            logger.error(f"图集拼图失败: {e}")
+            return None
+
+    def _compose_gallery(self, paths: list[Path]) -> PILImage:
+        """按顺序排成网格，每张图缩放到列宽，保持比例不裁剪"""
+        cols = 2 if len(paths) <= 4 else 3 if len(paths) <= 12 else 4
+        gap = self.GALLERY_GAP
+        cell_w = (self.GALLERY_WIDTH - gap * (cols + 1)) // cols
+        max_h = cell_w * 2
+
+        cells: list[PILImage] = []
+        for path in paths:
+            with Image.open(path) as raw:
+                img = self._flatten_to_rgb(raw)
+            ratio = min(cell_w / img.width, max_h / img.height)
+            cells.append(
+                img.resize(
+                    (
+                        max(1, round(img.width * ratio)),
+                        max(1, round(img.height * ratio)),
+                    ),
+                    Image.LANCZOS,
+                )
+            )
+
+        rows = [cells[i : i + cols] for i in range(0, len(cells), cols)]
+        height = gap + sum(max(img.height for img in row) + gap for row in rows)
+        canvas = Image.new("RGB", (self.GALLERY_WIDTH, height), self.BG_COLOR)
+        y = gap
+        for row in rows:
+            for col, img in enumerate(row):
+                x = gap + col * (cell_w + gap) + (cell_w - img.width) // 2
+                canvas.paste(img, (x, y))
+            y += max(img.height for img in row) + gap
+        return canvas
+
+    def _flatten_to_rgb(self, img: PILImage) -> PILImage:
+        """透明图铺白底，动图取首帧"""
+        if img.mode in ("RGBA", "LA") or (
+            img.mode == "P" and "transparency" in img.info
+        ):
+            rgba = img.convert("RGBA")
+            background = Image.new("RGB", rgba.size, self.BG_COLOR)
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            return background
+        return img.convert("RGB")
 
     @suppress_exception
     def _load_and_resize_cover(

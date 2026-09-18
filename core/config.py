@@ -145,6 +145,21 @@ class ConfigNodeContainer:
         return self._nodes.items()
 
 
+def qq_official_upload_limit_mb() -> int:
+    """当前 AstrBot 官方适配器能上传的视频上限
+
+    腾讯对 mp4 的软限制是 30 MB (超过降级成文件卡片); AstrBot 4.27.3 起支持分片上传,
+    更早的版本只能 base64 直传, 超过 10 MB 会被平台 413。
+    """
+    try:
+        from astrbot.core.platform.sources.qqofficial import (  # noqa: F401
+            qqofficial_chunked_upload,
+        )
+    except ImportError:
+        return 10
+    return 30
+
+
 # ================ 插件自定义配置 ==================
 
 
@@ -204,6 +219,9 @@ class PluginConfig(ConfigNode):
 
     arbiter: bool
     qq_official_mode: bool
+    qq_official_video_max_mb: int
+    qq_official_lowest_quality: bool
+    image_merge_threshold: int
     llm_tool_mode: bool
     debounce_interval: int
 
@@ -228,10 +246,12 @@ class PluginConfig(ConfigNode):
     _plugin_name = "astrbot_plugin_parser"
 
     def __init__(self, config: AstrBotConfig, context: Context):
-        if "qq_official_mode" not in config:
-            config["qq_official_mode"] = False
-        if "llm_tool_mode" not in config:
-            config["llm_tool_mode"] = False
+        # 旧配置文件里可能还没有这些键
+        config.setdefault("qq_official_mode", False)
+        config.setdefault("qq_official_video_max_mb", 30)
+        config.setdefault("qq_official_lowest_quality", True)
+        config.setdefault("image_merge_threshold", 4)
+        config.setdefault("llm_tool_mode", False)
         super().__init__(config)
         self.context = context
         self.admins_id = self.context.get_config().get("admins_id", [])
@@ -244,6 +264,19 @@ class PluginConfig(ConfigNode):
         self.proxy = self.proxy or None
         self.max_duration = self.source_max_minute * 60
         self.max_size = self.source_max_size * 1024 * 1024
+        # 官 Bot 模式: 视频体积受腾讯富媒体接口限制, 清晰度可强制最低档
+        self.force_lowest_quality = bool(
+            self.qq_official_mode and self.qq_official_lowest_quality
+        )
+        if self.qq_official_mode:
+            official_max_mb = min(
+                int(self.qq_official_video_max_mb), qq_official_upload_limit_mb()
+            )
+            self.max_size = min(self.max_size, official_max_mb * 1024 * 1024)
+            logger.info(
+                f"[官Bot] 媒体体积上限 {official_max_mb} MB, "
+                f"强制最低清晰度: {self.force_lowest_quality}"
+            )
 
         tz = context.get_config().get("timezone")
         self.timezone = (

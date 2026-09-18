@@ -2,7 +2,7 @@
 
 from abc import ABC
 from asyncio import Task, TimeoutError, sleep
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from pathlib import Path
 from re import Match, Pattern, compile
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
@@ -271,30 +271,49 @@ class BaseParser:
             )
         return VideoContent(path_task, cover_task, duration)
 
+    @staticmethod
+    def _split_mirrors(urls: str | Sequence[str]) -> tuple[str, list[str]]:
+        """一项内容可以是单个 URL, 也可以是同一资源的多个镜像 URL (首个为主链)"""
+        if isinstance(urls, str):
+            return urls, []
+        return urls[0], list(urls[1:])
+
     def create_image_contents(
         self,
-        image_urls: list[str],
+        image_urls: Sequence[str | Sequence[str]],
         headers: dict[str, str] | None = None,
     ):
         """创建图片内容列表"""
         contents: list[ImageContent] = []
-        for url in image_urls:
+        for urls in image_urls:
+            if not urls:
+                continue
+            url, backup_urls = self._split_mirrors(urls)
             task = self.downloader.download_img(
-                url, headers=headers or self.headers, proxy=self.proxy
+                url,
+                headers=headers or self.headers,
+                proxy=self.proxy,
+                backup_urls=backup_urls,
             )
             contents.append(ImageContent(task))
         return contents
 
     def create_dynamic_contents(
         self,
-        dynamic_urls: list[str],
+        dynamic_urls: Sequence[str | Sequence[str]],
         headers: dict[str, str] | None = None,
     ):
         """创建动态图片内容列表"""
         contents: list[DynamicContent] = []
-        for url in dynamic_urls:
+        for urls in dynamic_urls:
+            if not urls:
+                continue
+            url, backup_urls = self._split_mirrors(urls)
             task = self.downloader.download_video(
-                url, headers=headers or self.headers, proxy=self.proxy
+                url,
+                headers=headers or self.headers,
+                proxy=self.proxy,
+                backup_urls=backup_urls,
             )
             contents.append(DynamicContent(task))
         return contents

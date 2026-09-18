@@ -210,6 +210,8 @@ class IwaraParser(BaseParser):
 
         # 获取视频下载链接
         quality = self.mycfg.video_quality if self.mycfg.video_quality else "Source"
+        if self.cfg.force_lowest_quality:
+            quality = "360"
         fileURL = video_info["fileUrl"]
         urlInfo = await api.fileURL_get_urlInfo(fileURL)
         video_url = await api.urlInfo_Get_videoURL(urlInfo, quality)

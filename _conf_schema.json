@@ -23,6 +23,34 @@
         "type": "bool",
         "default": false
     },
+    "qq_official_video_max_mb": {
+        "description": "官 Bot 视频体积上限（MB）",
+        "hint": "仅官 Bot 适配模式生效，与“资源最大大小”取较小值。腾讯对 mp4 视频的软限制是 30 MB，超过会被降级成文件卡片而不是可播放的视频；AstrBot 4.27.3 之前的版本只能 base64 直传，超过 10 MB 会 413，插件检测到这种情况会自动按 10 MB 处理。",
+        "type": "int",
+        "slider": {
+            "min": 5,
+            "max": 200,
+            "step": 5
+        },
+        "default": 30
+    },
+    "qq_official_lowest_quality": {
+        "description": "官 Bot 模式强制最低清晰度",
+        "hint": "仅官 Bot 适配模式生效。开启后无视各解析器的清晰度配置，一律用最低档（抖音 540P、B站 360P、Iwara 360P）：文件小、上传快，不容易撞上传限制和被动回复 5 分钟时效。",
+        "type": "bool",
+        "default": true
+    },
+    "image_merge_threshold": {
+        "description": "图集拼图阈值",
+        "hint": "官 Bot 适配模式和 LLM 工具模式下（没有合并转发可用），一条解析结果里的图片超过这个数量时，会按原比例拼成一张长图发送，只占一条消息。官 Bot 每条消息最多被动回复 5 次，默认 4 刚好留出开头的提示。设为 0 关闭。",
+        "type": "int",
+        "slider": {
+            "min": 0,
+            "max": 20,
+            "step": 1
+        },
+        "default": 4
+    },
     "llm_tool_mode": {
         "description": "LLM 工具模式",
         "hint": "开启后不再监听消息主动解析链接，也不会贴表情或发送开始解析提示。仅在 LLM 调用 parse_media_link 工具时解析，视频和图片直接发送到当前会话，成功状态返回给 LLM。",
@@ -273,6 +301,22 @@
                         "hint": "选填",
                         "type": "text",
                         "default": ""
+                    },
+                    "video_quality": {
+                        "description": "抖音视频清晰度",
+                        "hint": "下载抖音视频的清晰度上限。所选清晰度不存在或超过资源大小限制时，会自动降到更低一档",
+                        "type": "string",
+                        "options": [
+                            "1080p",
+                            "720p",
+                            "540p"
+                        ],
+                        "labels": [
+                            "1080P 全高清",
+                            "720P 高清",
+                            "540P 标清"
+                        ],
+                        "default": "1080p"
                     }
                 }
             },

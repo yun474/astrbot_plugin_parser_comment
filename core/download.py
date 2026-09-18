@@ -1,12 +1,21 @@
-from asyncio import Task, TimeoutError, create_task, gather, sleep, to_thread
-from collections.abc import Callable, Coroutine
+from asyncio import (
+    Task,
+    TimeoutError,
+    create_task,
+    current_task,
+    gather,
+    shield,
+    sleep,
+    to_thread,
+)
+from collections.abc import Callable, Coroutine, Sequence
 from functools import wraps
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 import aiofiles
 import yt_dlp
-from aiohttp import ClientError, ClientSession, ClientTimeout
+from aiohttp import ClientError, ClientPayloadError, ClientSession, ClientTimeout
 from msgspec import Struct, convert
 from tqdm.asyncio import tqdm
 
@@ -26,6 +35,22 @@ from .utils import LimitedSizeDict, generate_file_name, merge_av, safe_unlink
 P = ParamSpec("P")
 T = TypeVar("T")
 
+MEDIA_SUFFIXES = frozenset(
+    {
+        ".mp4",
+        ".mov",
+        ".webm",
+        ".mp3",
+        ".m4a",
+        ".flac",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif",
+    }
+)
+
 
 def auto_task(func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, Task[T]]:
     """装饰器：自动将异步函数调用转换为 Task, 完整保留类型提示"""
@@ -34,9 +59,23 @@ def auto_task(func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, Task[T]]
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> Task[T]:
         coro = func(*args, **kwargs)
         name = " | ".join(str(arg) for arg in args if isinstance(arg, str))
-        return create_task(coro, name=func.__name__ + " | " + name)
+        task = create_task(coro, name=func.__name__ + " | " + name)
+        # 封面、头像等任务可能无人 await，标记异常已取回，避免 asyncio 在回收时刷屏
+        task.add_done_callback(_retrieve_exception)
+        return task
 
     return wrapper
+
+
+def _retrieve_exception(task: Task) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+def describe_error(exc: BaseException) -> str:
+    """把异常压成一句话，用于日志和用户提示"""
+    text = str(exc) or type(exc).__name__
+    return text if len(text) <= 120 else text[:117] + "..."
 
 
 class VideoInfo(Struct):
@@ -67,10 +106,11 @@ class Downloader:
 
     def __init__(self, config: PluginConfig):
         self.cfg = config
-        self.max_size = self.cfg.source_max_size
         self.default_headers: dict[str, str] = COMMON_HEADER.copy()
         # 视频信息缓存
         self.info_cache: LimitedSizeDict[str, VideoInfo] = LimitedSizeDict()
+        # 正在下载中的文件 -> 下载任务，同一文件只下载一次
+        self._inflight: dict[Path, Task[Path]] = {}
         # 用于流式下载的客户端
         self.client = ClientSession(
             timeout=ClientTimeout(total=self.cfg.download_timeout)
@@ -87,39 +127,69 @@ class Downloader:
         *,
         file_name: str | None = None,
         headers: dict[str, str] | None = None,
-        proxy: str | None | object = ...,
+        proxy: str | None = None,
+        backup_urls: Sequence[str] = (),
     ) -> Path:
-        """流式下载"""
+        """流式下载
+
+        Args:
+            backup_urls: 同一资源的备用直链，主链接失败后按顺序轮换重试
+        """
         if not file_name:
             file_name = generate_file_name(url)
         file_path = self.cfg.cache_dir / file_name
         # 如果文件存在，则直接返回
         if file_path.exists():
             return file_path
-        headers = headers or self.default_headers
-        retries = self.cfg.download_retry_times
-        for attempt in range(retries + 1):
+        # 同一文件正在下载时复用该任务，避免读到写了一半的文件
+        if (inflight := self._inflight.get(file_path)) is not None:
+            return await shield(inflight)
+        self._inflight[file_path] = current_task()  # type: ignore[assignment]
+        try:
+            return await self._streamd(
+                [url, *backup_urls], file_path, headers or self.default_headers, proxy
+            )
+        finally:
+            self._inflight.pop(file_path, None)
+
+    async def _streamd(
+        self,
+        urls: list[str],
+        file_path: Path,
+        headers: dict[str, str],
+        proxy: str | None,
+    ) -> Path:
+        # 先写入 .part 临时文件，下载完整后再改名，保证缓存目录里只有完整文件
+        part_path = file_path.with_name(file_path.name + ".part")
+        max_bytes = self.cfg.max_size
+        attempts = max(self.cfg.download_retry_times + 1, len(urls))
+        for attempt in range(attempts):
+            url = urls[attempt % len(urls)]
             try:
                 async with self.client.get(
                     url, headers=headers, allow_redirects=True, proxy=proxy
                 ) as response:
                     if response.status >= 400:
                         raise ClientError(f"HTTP {response.status} {response.reason}")
+                    # 风控/验证页会以 200 + HTML 返回, 别把它当成媒体存下来
+                    if (
+                        response.content_type == "text/html"
+                        and file_path.suffix.lower() in MEDIA_SUFFIXES
+                    ):
+                        raise ClientError("服务器返回了网页而不是媒体文件")
                     content_length = response.content_length
-                    max_bytes = self.max_size * 1024 * 1024
 
                     if content_length == 0:
-                        logger.warning(f"媒体 url: {url}, 大小为 0, 取消下载")
                         raise ZeroSizeException
                     if content_length and content_length > max_bytes:
                         logger.warning(
-                            f"媒体 url: {url} 大小 {content_length / 1024 / 1024:.2f} MB 超过 {self.max_size} MB, 取消下载"
+                            f"媒体大小 {content_length / 1024 / 1024:.2f} MB 超过 {max_bytes / 1024 / 1024:.0f} MB, 取消下载 | url: {url}"
                         )
                         raise SizeLimitException
 
                     downloaded = 0
-                    with self.get_progress_bar(file_name, content_length) as bar:
-                        async with aiofiles.open(file_path, "wb") as file:
+                    with self.get_progress_bar(file_path.name, content_length) as bar:
+                        async with aiofiles.open(part_path, "wb") as file:
                             async for chunk in response.content.iter_chunked(
                                 1024 * 1024
                             ):
@@ -130,24 +200,30 @@ class Downloader:
                                 bar.update(len(chunk))
 
                     if downloaded == 0:
-                        logger.warning(f"媒体 url: {url}, 实际大小为 0, 取消下载")
                         raise ZeroSizeException
                     if content_length and downloaded < content_length:
-                        raise ClientError(
-                            f"HTTP payload incomplete {downloaded}/{content_length}"
+                        raise ClientPayloadError(
+                            f"数据不完整 {downloaded}/{content_length}"
                         )
 
+                await to_thread(part_path.replace, file_path)
                 return file_path
-            except (ZeroSizeException, SizeLimitException):
-                await safe_unlink(file_path)
+            except (ZeroSizeException, SizeLimitException) as exc:
+                await safe_unlink(part_path)
+                if isinstance(exc, ZeroSizeException):
+                    logger.warning(f"{exc.message} | url: {url}")
                 raise
-            except (ClientError, TimeoutError) as exc:
-                await safe_unlink(file_path)
-                if attempt < retries:
+            except (ClientError, TimeoutError, OSError) as exc:
+                await safe_unlink(part_path)
+                reason = describe_error(exc)
+                if attempt < attempts - 1:
+                    logger.warning(
+                        f"下载失败: {reason}, 准备第 {attempt + 1} 次重试 | url: {url}"
+                    )
                     await sleep(1 + attempt)
                     continue
-                logger.exception(f"下载失败 | url: {url}, file_path: {file_path}")
-                raise DownloadException("媒体下载失败") from exc
+                logger.error(f"下载失败: {reason}, 已放弃 | url: {url}")
+                raise DownloadException(f"媒体下载失败: {reason}") from exc
         raise DownloadException("媒体下载失败")
 
     @staticmethod
@@ -179,11 +255,16 @@ class Downloader:
         video_name: str | None = None,
         headers: dict[str, str] | None = None,
         proxy: str | None = None,
+        backup_urls: Sequence[str] = (),
     ) -> Path:
         if video_name is None:
             video_name = generate_file_name(url, ".mp4")
         return await self.streamd(
-            url, file_name=video_name, headers=headers, proxy=proxy
+            url,
+            file_name=video_name,
+            headers=headers,
+            proxy=proxy,
+            backup_urls=backup_urls,
         )
 
     @auto_task
@@ -208,7 +289,7 @@ class Downloader:
         *,
         file_name: str | None = None,
         headers: dict[str, str] | None = None,
-        proxy: str | None | object = ...,
+        proxy: str | None = None,
     ) -> Path:
         if file_name is None:
             file_name = generate_file_name(url, ".zip")
@@ -223,18 +304,25 @@ class Downloader:
         *,
         img_name: str | None = None,
         headers: dict[str, str] | None = None,
-        proxy: str | None | object = ...,
+        proxy: str | None = None,
+        backup_urls: Sequence[str] = (),
     ) -> Path:
         if img_name is None:
             img_name = generate_file_name(url, ".jpg")
-        return await self.streamd(url, file_name=img_name, headers=headers, proxy=proxy)
+        return await self.streamd(
+            url,
+            file_name=img_name,
+            headers=headers,
+            proxy=proxy,
+            backup_urls=backup_urls,
+        )
 
     async def download_imgs_without_raise(
         self,
         urls: list[str],
         *,
         headers: dict[str, str] | None = None,
-        proxy: str | None | object = ...,
+        proxy: str | None = None,
     ) -> list[Path]:
         paths_or_errs = await gather(
             *[self.download_img(url, headers=headers, proxy=proxy) for url in urls],
@@ -334,6 +422,9 @@ class Downloader:
             url, cookiefile=cookiefile, headers=headers, proxy=proxy
         )
         if info.duration > self.cfg.max_duration:
+            logger.warning(
+                f"媒体时长 {info.duration}s 超过 {self.cfg.max_duration}s, 取消下载 | url: {url}"
+            )
             raise DurationLimitException
 
         video_path = self.cfg.cache_dir / generate_file_name(url, ".mp4")
@@ -359,8 +450,17 @@ class Downloader:
             opts["js_runtimes"] = {"node": {}}
 
         with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore
-            await to_thread(ydl.download, [url])
+            await self._ytdlp_download(ydl, url)
         return video_path
+
+    @staticmethod
+    async def _ytdlp_download(ydl: yt_dlp.YoutubeDL, url: str) -> None:
+        try:
+            await to_thread(ydl.download, [url])
+        except yt_dlp.utils.DownloadError as exc:
+            reason = describe_error(exc)
+            logger.error(f"yt-dlp 下载失败: {reason} | url: {url}")
+            raise DownloadException(f"媒体下载失败: {reason}") from exc
 
     @auto_task
     async def ytdlp_download_video_relaxed(
@@ -399,14 +499,15 @@ class Downloader:
             opts["js_runtimes"] = {"node": {}}
 
         with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore
-            await to_thread(ydl.download, [url])
+            await self._ytdlp_download(ydl, url)
         if video_path.exists():
             return video_path
 
         candidates = sorted(self.cfg.cache_dir.glob(f"{file_stem}*.mp4"))
         if candidates:
             return candidates[0]
-        raise DownloadException("yt-dlp 视频下载失败")
+        logger.error(f"yt-dlp 下载后未找到输出文件 | url: {url}")
+        raise DownloadException("媒体下载失败: yt-dlp 未产出文件")
 
     @auto_task
     async def ytdlp_download_audio(
@@ -442,5 +543,5 @@ class Downloader:
             opts["cookiefile"] = str(cookiefile)
 
         with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore
-            await to_thread(ydl.download, [url])
+            await self._ytdlp_download(ydl, url)
         return audio_path

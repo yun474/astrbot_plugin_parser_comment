@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 from curl_cffi import requests as curl_requests
 
+from astrbot.api import logger
+
 from ..config import PluginConfig
 from ..data import MediaContent, Platform, SendGroup, TextContent, VideoContent
 from ..download import Downloader
@@ -120,19 +122,39 @@ V4_DATA = (
 class XiaoheiheParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name="xiaoheihe", display_name="小黑盒")
     CHAR_TABLE: ClassVar[str] = "AB45STUVWZEFGJ6CH01D237IXYPQRKLMN89"
+    API: ClassVar[str] = "https://api.xiaoheihe.cn"
+    # 与网页端 (web_version 3.0) 保持一致的公共参数
+    WEB_PARAMS: ClassVar[dict[str, str]] = {
+        "app": "heybox",
+        "os_type": "web",
+        "x_app": "heybox_website",
+        "x_client_type": "web",
+        "x_os_type": "Windows",
+        "x_client_version": "",
+        "client_type": "web",
+        "web_version": "3.0",
+        "version": "999.0.4",
+    }
+    CAPTCHA_TIP: ClassVar[str] = (
+        "小黑盒触发了人机验证，请在浏览器登录小黑盒并通过验证后，"
+        "把 Cookie 填入插件的小黑盒解析器配置"
+    )
 
     def __init__(self, config: PluginConfig, downloader: Downloader):
         super().__init__(config, downloader)
         self.mycfg = config.parser.xiaoheihe
-        self.headers.update(
-            {
-                "accept": "application/json, text/plain, */*",
-                "referer": "https://www.xiaoheihe.cn/",
-                "origin": "https://www.xiaoheihe.cn",
-            }
-        )
+        # 接口请求头: UA 交给 curl_cffi 的浏览器指纹, 避免与 TLS 指纹不一致
+        self.api_headers = {
+            "accept": "application/json, text/plain, */*",
+            "referer": "https://www.xiaoheihe.cn/",
+            "origin": "https://www.xiaoheihe.cn",
+        }
         if self.mycfg.cookies:
-            self.headers["cookie"] = self.mycfg.cookies
+            self.api_headers["cookie"] = self.mycfg.cookies
+        # 媒体下载请求头, 不携带 Cookie
+        self.headers["referer"] = "https://www.xiaoheihe.cn/"
+        # 匿名设备 token, 首次解析时通过指纹接口换取, 之后复用
+        self._anon_token: str | None = None
 
     @handle(
         "xiaoheihe.cn/app/bbs/link",
@@ -166,10 +188,10 @@ class XiaoheiheParser(BaseParser):
             searched.group("appid"), searched.group("game_type")
         )
 
+    # ---------------- 帖子 ----------------
+
     async def _parse_bbs_by_link_id(self, link_id: str):
-        request_ctx = await self._build_request_context()
-        payload = await self._fetch_link_tree(link_id, request_ctx)
-        link = self._extract_link(payload)
+        link = await self._fetch_link(link_id)
 
         title = self._clean_text(str(link.get("title") or "")) or None
         final_url = f"https://www.xiaoheihe.cn/app/bbs/link/{link_id}"
@@ -177,7 +199,7 @@ class XiaoheiheParser(BaseParser):
 
         body_text, image_urls = self._parse_body_text_and_images(link)
         video_content = self._build_video_content(link)
-        show_body_text = bool(getattr(self.mycfg, "show_body_text", False))
+        show_body_text = bool(self.mycfg.show_body_text)
         text_content = TextContent(body_text) if show_body_text and body_text else None
 
         contents: list[MediaContent] = []
@@ -189,16 +211,6 @@ class XiaoheiheParser(BaseParser):
             contents.append(video_content)
         if text_content is not None:
             contents.append(text_content)
-
-        send_groups: list[SendGroup] = []
-        primary_contents = [
-            cont for cont in contents if not isinstance(cont, VideoContent)
-        ]
-        video_contents = [cont for cont in contents if isinstance(cont, VideoContent)]
-        if primary_contents:
-            send_groups.append(SendGroup(contents=primary_contents))
-        for content in video_contents:
-            send_groups.append(SendGroup(contents=[content], force_merge=False))
 
         info_parts: list[str] = []
         if image_urls:
@@ -212,7 +224,7 @@ class XiaoheiheParser(BaseParser):
             url=final_url,
             author=author,
             contents=contents,
-            send_groups=send_groups,
+            send_groups=self._build_send_groups(contents),
             extra={
                 "info": "，".join(info_parts) if info_parts else None,
                 "body_image_urls": image_urls,
@@ -222,106 +234,39 @@ class XiaoheiheParser(BaseParser):
             },
         )
 
-    async def _parse_game_by_appid(self, appid: str, game_type: str):
-        appid = appid.strip()
-        if not appid:
-            raise ParseException("无效的小黑盒游戏 appid")
-
-        web_url = self._canonical_game_web_url(appid, game_type)
-        html_text = await self._request_text(web_url, headers=self.headers)
-        game_root = self._extract_game_root(html_text, appid)
-
-        steam_appid = self._pick_steam_appid(game_root, appid)
-        intro_root = await self._fetch_game_intro(steam_appid) if steam_appid else {}
-
-        title = self._build_game_title(game_root)
-        desc = self._build_game_desc(html_text, game_root, intro_root)
-        image_urls = self._extract_game_images(game_root, html_text)
-        video_entries = self._extract_game_videos(game_root, html_text)
-
-        show_body_text = bool(getattr(self.mycfg, "show_body_text", False))
-        text_content = TextContent(desc) if show_body_text and desc else None
-
-        contents: list[MediaContent] = []
-        if image_urls:
-            contents.extend(
-                self.create_image_contents(image_urls, headers=self.headers)
-            )
-        for video_url, video_cover in video_entries:
-            contents.append(self._build_video_content_from_url(video_url, video_cover))
-        if text_content is not None:
-            contents.append(text_content)
-
-        send_groups: list[SendGroup] = []
-        primary_contents = [
-            cont for cont in contents if not isinstance(cont, VideoContent)
-        ]
-        video_contents = [cont for cont in contents if isinstance(cont, VideoContent)]
-        if primary_contents:
-            send_groups.append(SendGroup(contents=primary_contents))
-        for content in video_contents:
-            send_groups.append(SendGroup(contents=[content], force_merge=False))
-
-        info_parts: list[str] = []
-        if image_urls:
-            info_parts.append(f"游戏图片 {len(image_urls)} 张")
-        if video_entries:
-            info_parts.append(f"游戏视频 {len(video_entries)} 个")
-
-        return self.result(
-            title=title,
-            text=None if show_body_text else (desc or None),
-            url=web_url,
-            contents=contents,
-            send_groups=send_groups,
-            extra={
-                "info": "，".join(info_parts) if info_parts else None,
-                "body_image_urls": image_urls,
-                "source_kind": "xiaoheihe_game_page",
-                "game_appid": appid,
-                "steam_appid": steam_appid,
-                "game_type": game_type,
-                "video_url": video_entries[0][0] if video_entries else None,
-                "video_urls": [item[0] for item in video_entries],
-            },
-        )
-
-    async def _build_request_context(self) -> dict[str, str]:
-        token = self._extract_xhh_tokenid_from_cookies()
-        device_id = None
-        if token and token.startswith("B"):
-            device_id = token[1:]
-
-        if not token:
-            token, device_id = await self._fetch_xhh_tokenid()
-
-        if not token:
-            raise ParseException("获取小黑盒 x_xhh_tokenid 失败")
-
-        return {
-            "x_xhh_tokenid": token,
-            "device_id": device_id or "",
+    async def _fetch_link(self, link_id: str) -> dict[str, Any]:
+        params = {
+            "link_id": link_id,
+            "is_first": "1",
+            "page": "1",
+            "index": "1",
+            "limit": "20",
+            "owner_only": "0",
         }
+        payload = await self._api_get(
+            "/bbs/app/link/tree", params, cookies=await self._device_cookies()
+        )
+        result = payload.get("result")
+        link = result.get("link") if isinstance(result, dict) else None
+        if not isinstance(link, dict):
+            raise ParseException("小黑盒 link/tree 缺少 link 节点")
+        return link
+
+    async def _device_cookies(self) -> dict[str, str] | None:
+        """配置里没有 x_xhh_tokenid 时, 用指纹接口换一个匿名设备 token"""
+        if self._extract_xhh_tokenid_from_cookies():
+            return None
+        if self._anon_token is None:
+            device_id = await self._fetch_device_id()
+            if not device_id:
+                raise ParseException("小黑盒 deviceprofile 未返回 deviceId")
+            self._anon_token = f"B{device_id}"
+        return {"x_xhh_tokenid": self._anon_token}
 
     def _extract_xhh_tokenid_from_cookies(self) -> str | None:
-        cookie_header = self.headers.get("cookie", "")
-        if not cookie_header:
-            return None
+        cookie_header = self.api_headers.get("cookie", "")
         matched = re.search(r"(?:^|;\s*)x_xhh_tokenid=([^;]+)", cookie_header)
-        if matched:
-            return matched.group(1)
-        return None
-
-    @staticmethod
-    @staticmethod
-    def _canonical_game_web_url(appid: str, game_type: str) -> str:
-        return f"https://www.xiaoheihe.cn/app/topic/game/{game_type.strip().lower() or 'pc'}/{appid}"
-
-    async def _fetch_xhh_tokenid(self) -> tuple[str, str | None]:
-        device_id = await self._fetch_device_id()
-        if not device_id:
-            raise ParseException("小黑盒 deviceprofile 未返回 deviceId")
-        return f"B{device_id}", device_id
+        return matched.group(1) if matched else None
 
     async def _fetch_device_id(self) -> str | None:
         payload = {
@@ -337,180 +282,109 @@ class XiaoheiheParser(BaseParser):
             "POST",
             "https://fp-it.portal101.cn/deviceprofile/v4",
             json=payload,
-            headers={"accept": "application/json, text/plain, */*"},
         )
         detail = response.get("detail") or {}
         device_id = detail.get("deviceId")
         return str(device_id) if device_id else None
 
-    async def _fetch_game_intro(self, steam_appid: int) -> dict[str, Any]:
-        payload = await self._request_json(
-            "GET",
-            "https://api.xiaoheihe.cn/game/game_introduction/",
-            params={"steam_appid": steam_appid, "return_json": 1},
-            headers={"accept": "application/json, text/plain, */*", **self.headers},
+    # ---------------- 游戏 ----------------
+
+    async def _parse_game_by_appid(self, appid: str, game_type: str):
+        appid = appid.strip()
+        if not appid:
+            raise ParseException("无效的小黑盒游戏 appid")
+        game_type = game_type.strip().lower() or "pc"
+
+        game = await self._fetch_game_detail(appid, game_type)
+        steam_appid = self._pick_steam_appid(game, appid)
+        intro = await self._fetch_game_intro(steam_appid) if steam_appid else {}
+
+        web_url = f"https://www.xiaoheihe.cn/app/topic/game/{game_type}/{appid}"
+        title = self._build_game_title(game)
+        desc = self._build_game_desc(game, intro)
+        image_urls = self._extract_game_images(game)
+        video_entries = self._extract_game_videos(game)
+
+        show_body_text = bool(self.mycfg.show_body_text)
+        text_content = TextContent(desc) if show_body_text and desc else None
+
+        contents: list[MediaContent] = []
+        if image_urls:
+            contents.extend(
+                self.create_image_contents(image_urls, headers=self.headers)
+            )
+        for video_url, video_cover in video_entries:
+            contents.append(self._build_video_content_from_url(video_url, video_cover))
+        if text_content is not None:
+            contents.append(text_content)
+
+        info_parts: list[str] = []
+        if image_urls:
+            info_parts.append(f"游戏图片 {len(image_urls)} 张")
+        if video_entries:
+            info_parts.append(f"游戏视频 {len(video_entries)} 个")
+
+        return self.result(
+            title=title,
+            text=None if show_body_text else (desc or None),
+            url=web_url,
+            contents=contents,
+            send_groups=self._build_send_groups(contents),
+            extra={
+                "info": "，".join(info_parts) if info_parts else None,
+                "body_image_urls": image_urls,
+                "source_kind": "xiaoheihe_game_detail",
+                "game_appid": appid,
+                "steam_appid": steam_appid,
+                "game_type": game_type,
+                "video_url": video_entries[0][0] if video_entries else None,
+                "video_urls": [item[0] for item in video_entries],
+            },
         )
-        if payload.get("status") != "ok":
+
+    async def _fetch_game_detail(self, appid: str, game_type: str) -> dict[str, Any]:
+        """网页端按平台走不同的详情接口"""
+        if game_type == "pc":
+            path, params = "/game/get_game_detail/", {"steam_appid": appid}
+        elif game_type == "console":
+            path, params = (
+                "/game/console/get_game_detail/",
+                {"appid": appid, "platf": game_type},
+            )
+        else:
+            path, params = (
+                "/game/mobile/get_game_detail/",
+                {"appid": appid, "platf": game_type},
+            )
+        payload = await self._api_get(path, params)
+        result = payload.get("result")
+        if not isinstance(result, dict) or not result:
+            raise ParseException("小黑盒游戏详情为空")
+        return result
+
+    async def _fetch_game_intro(self, steam_appid: int) -> dict[str, Any]:
+        try:
+            payload = await self._api_get(
+                "/game/game_introduction/",
+                {"steam_appid": steam_appid, "return_json": 1},
+            )
+        except ParseException as e:
+            logger.debug(f"[小黑盒] 游戏简介获取失败: {e}")
             return {}
         result = payload.get("result")
         return result if isinstance(result, dict) else {}
 
-    async def _fetch_link_tree(
-        self, link_id: str, request_ctx: dict[str, str]
-    ) -> dict[str, Any]:
-        sig = self._sign_path("/bbs/app/link/tree")
-        params = {
-            "os_type": "web",
-            "app": "heybox",
-            "client_type": "web",
-            "version": "999.0.4",
-            "web_version": "2.5",
-            "x_client_type": "web",
-            "x_app": "heybox_website",
-            "heybox_id": "",
-            "x_os_type": "Windows",
-            "device_info": "Chrome",
-            "device_id": request_ctx.get("device_id", ""),
-            "link_id": link_id,
-            "owner_only": "1",
-            **sig,
-        }
-
-        payload = await self._request_json(
-            "GET",
-            "https://api.xiaoheihe.cn/bbs/app/link/tree",
-            params=params,
-            cookies={"x_xhh_tokenid": request_ctx["x_xhh_tokenid"]},
-            headers=self.headers,
-        )
-        status = payload.get("status")
-        if status != "ok":
-            raise ParseException(f"小黑盒 link/tree 请求失败: {status}")
-        result = payload.get("result")
-        if not isinstance(result, dict):
-            raise ParseException("小黑盒 link/tree 结果为空")
-        return result
-
-    def _extract_link(self, payload: dict[str, Any]) -> dict[str, Any]:
-        link = payload.get("link")
-        if not isinstance(link, dict):
-            raise ParseException("小黑盒 link/tree 缺少 link 节点")
-        return link
-
-    def _extract_game_root(self, html_text: str, appid: str) -> dict[str, Any]:
-        payload = self._extract_nuxt_data_payload(html_text)
-        if not payload:
-            raise ParseException("小黑盒游戏页未找到 __NUXT_DATA__")
-        root = self._devalue_resolve_root(payload)
-        game = self._find_best_game_dict(root, appid)
-        if not game:
-            raise ParseException("小黑盒游戏页未找到游戏详情数据")
-        return game
-
-    def _extract_nuxt_data_payload(self, html_text: str) -> list[Any] | None:
-        matched = re.search(
-            r'<script[^>]+id="__NUXT_DATA__"[^>]*>(.*?)</script>',
-            html_text,
-            re.S | re.I,
-        )
-        if not matched:
-            return None
-        raw = matched.group(1).strip()
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            return None
-        return payload if isinstance(payload, list) else None
-
-    def _devalue_resolve_root(self, payload: list[Any]) -> Any:
-        total = len(payload)
-        memo: dict[int, Any] = {}
-        resolving: set[int] = set()
-
-        def resolve(value: Any) -> Any:
-            if isinstance(value, int) and 0 <= value < total:
-                return resolve_index(value)
-            if isinstance(value, list):
-                if (
-                    len(value) == 2
-                    and isinstance(value[0], str)
-                    and value[0]
-                    in {
-                        "ShallowReactive",
-                        "Reactive",
-                        "Ref",
-                        "ShallowRef",
-                        "Readonly",
-                        "ShallowReadonly",
-                    }
-                ):
-                    return resolve(value[1])
-                return [resolve(item) for item in value]
-            if isinstance(value, dict):
-                return {k: resolve(v) for k, v in value.items()}
-            return value
-
-        def resolve_index(index: int) -> Any:
-            if index in memo:
-                return memo[index]
-            if index in resolving:
-                return None
-            resolving.add(index)
-            memo[index] = None
-            memo[index] = resolve(payload[index])
-            resolving.remove(index)
-            return memo[index]
-
-        return resolve(0)
-
-    def _find_best_game_dict(self, root: Any, appid: str) -> dict[str, Any] | None:
-        best: dict[str, Any] | None = None
-        best_score = -1
-        stack: list[Any] = [root]
-        while stack:
-            current = stack.pop()
-            if isinstance(current, dict):
-                current_appid = str(current.get("appid") or "").strip()
-                current_steam_appid = str(current.get("steam_appid") or "").strip()
-                score = 0
-                for key in (
-                    "about_the_game",
-                    "name",
-                    "name_en",
-                    "price",
-                    "heybox_price",
-                    "user_num",
-                    "game_award",
-                    "comment_stats",
-                    "screenshots",
-                    "share_url",
-                    "share_title",
-                ):
-                    if key in current:
-                        score += 3
-
-                if current_appid == appid or current_steam_appid == appid:
-                    score += 50
-
-                share_url = str(current.get("share_url") or "")
-                if appid and appid in share_url:
-                    score += 20
-
-                if str(current.get("type") or "").strip().lower() == "game":
-                    score += 5
-
-                if score > best_score and score >= 12:
-                    best = current
-                    best_score = score
-
-                for value in current.values():
-                    if isinstance(value, (dict, list)):
-                        stack.append(value)
-            elif isinstance(current, list):
-                for value in current:
-                    if isinstance(value, (dict, list)):
-                        stack.append(value)
-        return best
+    @staticmethod
+    def _build_send_groups(contents: list[MediaContent]) -> list[SendGroup]:
+        """视频从合并转发里拆出来单独发送"""
+        send_groups: list[SendGroup] = []
+        primary = [cont for cont in contents if not isinstance(cont, VideoContent)]
+        if primary:
+            send_groups.append(SendGroup(contents=primary))
+        for cont in contents:
+            if isinstance(cont, VideoContent):
+                send_groups.append(SendGroup(contents=[cont], force_merge=False))
+        return send_groups
 
     def _pick_steam_appid(
         self, game: dict[str, Any], fallback_appid: str
@@ -518,7 +392,7 @@ class XiaoheiheParser(BaseParser):
         value = game.get("steam_appid") or fallback_appid
         try:
             return int(str(value).strip())
-        except Exception:
+        except ValueError:
             return None
 
     def _build_game_title(self, game: dict[str, Any]) -> str:
@@ -528,24 +402,24 @@ class XiaoheiheParser(BaseParser):
             return f"{name}（{name_en}）"
         return name or name_en or "小黑盒游戏详情"
 
-    def _build_game_desc(
-        self, html_text: str, game: dict[str, Any], intro: dict[str, Any]
-    ) -> str:
+    def _build_game_desc(self, game: dict[str, Any], intro: dict[str, Any]) -> str:
         lines: list[str] = []
+        # 详情接口的简介是纯文本摘要, 比 Steam 图文页剥掉标签后更可读
         intro_text = self._format_game_intro_text(
-            str(intro.get("about_the_game") or "")
+            str(game.get("about_the_game") or intro.get("about_the_game") or "")
         )
         if intro_text:
             lines.append(intro_text)
 
-        types = self._parse_game_types_from_html(html_text)
-        if types:
-            lines.append(f"类型：{types}")
+        tags = self._build_game_tags(game)
+        if tags:
+            lines.append(f"类型：{tags}")
 
         score = str(game.get("score") or "").strip()
+        comment_stats = game.get("comment_stats")
         score_comment = (
-            (game.get("comment_stats") or {}).get("score_comment")
-            if isinstance(game.get("comment_stats"), dict)
+            comment_stats.get("score_comment")
+            if isinstance(comment_stats, dict)
             else None
         )
         if score:
@@ -588,143 +462,64 @@ class XiaoheiheParser(BaseParser):
 
         return "\n\n".join(line for line in lines if line).strip()
 
-    def _parse_game_types_from_html(self, html_text: str) -> str:
-        group1 = ""
-        group2_tags: list[str] = []
-        matched = re.search(
-            r'<div class="row-2">.*?<div class="tags">(.*?)</div></div>',
-            html_text,
-            re.S | re.I,
-        )
-        tags_html = matched.group(1) if matched else ""
-        if tags_html:
-            matched_group = re.search(
-                r'<div class="tag common"[^>]*>(.*?)</div>', tags_html, re.S | re.I
-            )
-            if matched_group:
-                spans = re.findall(
-                    r"<span[^>]*>(.*?)</span>", matched_group.group(1), re.S | re.I
-                )
-                tokens = [self._strip_tags(item) for item in spans]
-                tokens = [
-                    re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", "", token) for token in tokens
-                ]
-                tokens = [token for token in tokens if token]
-                if tokens:
-                    group1 = " ".join(tokens)
-            raw_tags = re.findall(
-                r'<p class="tag"[^>]*>(.*?)</p>', tags_html, re.S | re.I
-            )
-            group2_tags = [self._strip_tags(item) for item in raw_tags]
-            group2_tags = [item for item in group2_tags if item]
+    @staticmethod
+    def _build_game_tags(game: dict[str, Any]) -> str:
+        """common_tags 里的平台特性 (中文/单人...) 和游戏标签"""
+        features: list[str] = []
+        tags: list[str] = []
+        for tag in game.get("common_tags") or []:
+            if not isinstance(tag, dict):
+                continue
+            if tag.get("type") == "steam_aggre":
+                for item in tag.get("desc_list") or []:
+                    if cleaned := re.sub(r"[^一-鿿A-Za-z0-9]+", "", str(item)):
+                        features.append(cleaned)
+            elif tag.get("type") == "simple_tag" and tag.get("desc"):
+                tags.append(str(tag["desc"]).strip())
 
         parts: list[str] = []
-        if group1:
-            parts.append(f"[ {group1} ]")
-        if group2_tags:
-            parts.append(f"[ {' '.join(group2_tags)} ]")
-        return " ".join(parts).strip()
+        if features:
+            parts.append(f"[ {' '.join(features)} ]")
+        if tags:
+            parts.append(f"[ {' '.join(tags)} ]")
+        return " ".join(parts)
 
-    def _extract_game_images(self, game: dict[str, Any], html_text: str) -> list[str]:
+    @staticmethod
+    def _iter_screenshots(game: dict[str, Any]):
+        for item in game.get("screenshots") or []:
+            if isinstance(item, dict) and item.get("url"):
+                yield item
+
+    def _extract_game_images(self, game: dict[str, Any]) -> list[str]:
         result: list[str] = []
         seen: set[str] = set()
-
-        def add(candidate: Any) -> None:
-            if not isinstance(candidate, str):
-                return
-            image = candidate.strip()
-            if not image.startswith("http"):
-                return
-            image_lower = image.lower()
-            if "/thumbnail/" in image_lower:
-                return
-            if any(host in image_lower for host in ("open.gtimg.cn", "qq.ugcimg.cn")):
-                return
-            if not any(
-                keyword in image_lower
-                for keyword in ("gameimg", "steam_item_assets", "screenshot")
-            ):
-                return
-            key = image.split("?", 1)[0]
-            if key in seen:
-                return
-            seen.add(key)
-            result.append(image)
-
-        screenshot_keys = (
-            "screenshots",
-            "screenshot_list",
-            "screen_shot",
-            "screen_shots",
-            "images",
-            "image_list",
-            "game_imgs",
-        )
-        for key in screenshot_keys:
-            value = game.get(key)
-            if isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        for nested_key in ("url", "image", "img", "src"):
-                            add(item.get(nested_key))
-                    else:
-                        add(item)
-
-        for key in ("header_img", "cover", "cover_img", "poster", "share_img"):
-            add(game.get(key))
-
-        if result:
-            return result
-
-        all_images = re.findall(
-            r'https?://[^"\'\s<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\'\s<>]*)?',
-            html_text,
-            re.I,
-        )
-        for image in all_images:
-            add(image)
+        for item in self._iter_screenshots(game):
+            if item.get("type") == "movie":
+                continue
+            url = str(item["url"]).strip()
+            key = url.split("?", 1)[0]
+            if url.startswith("http") and key not in seen:
+                seen.add(key)
+                result.append(url)
+        if not result and str(game.get("image") or "").startswith("http"):
+            result.append(str(game["image"]))
         return result
 
     def _extract_game_videos(
-        self, game: dict[str, Any], html_text: str
+        self, game: dict[str, Any]
     ) -> list[tuple[str, str | None]]:
-        mode = str(getattr(self.mycfg, "video_send_mode", "first") or "first").lower()
+        mode = str(self.mycfg.video_send_mode or "first").lower()
         if mode == "none":
             return []
 
         results: list[tuple[str, str | None]] = []
-        seen: set[str] = set()
-        video_cover = str(game.get("video_thumb") or "").strip() or None
-
-        def add(url: str | None):
-            if not url:
-                return False
-            value = str(url).strip()
-            if not value or value in seen:
-                return False
-            seen.add(value)
-            results.append((value, video_cover))
-            return True
-
-        first_only = mode != "all"
-
-        if add(game.get("video_url")) and first_only:
-            return results
-
-        matched_m3u8 = re.findall(
-            r'https?://[^"\'\s<>]+\.m3u8(?:\?[^"\'\s<>]*)?', html_text, re.I
-        )
-        for item in matched_m3u8:
-            if add(item) and first_only:
-                return results
-
-        matched_mp4 = re.findall(
-            r'https?://[^"\'\s<>]+\.(?:mp4|mov)(?:\?[^"\'\s<>]*)?', html_text, re.I
-        )
-        for item in matched_mp4:
-            if add(item) and first_only:
-                return results
-
+        for item in self._iter_screenshots(game):
+            if item.get("type") != "movie":
+                continue
+            cover = str(item.get("thumbnail") or "").strip() or None
+            results.append((str(item["url"]).strip(), cover))
+            if mode != "all":
+                break
         return results
 
     @staticmethod
@@ -751,7 +546,7 @@ class XiaoheiheParser(BaseParser):
     def _format_yuan_from_coin(coin: Any) -> str:
         try:
             value = int(coin) / 1000.0
-        except Exception:
+        except (TypeError, ValueError):
             return ""
         if abs(value - round(value)) < 1e-9:
             return str(int(round(value)))
@@ -761,7 +556,7 @@ class XiaoheiheParser(BaseParser):
         if not text:
             return ""
         stripped = self._strip_tags(text)
-        stripped = stripped.replace("\u3000", " ").replace("\xa0", " ")
+        stripped = stripped.replace("　", " ").replace("\xa0", " ")
         stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
         return stripped
 
@@ -813,6 +608,8 @@ class XiaoheiheParser(BaseParser):
             return f"{year}.{month}.{day}"
         return text.strip()
 
+    # ---------------- 帖子内容提取 ----------------
+
     def _build_author(self, link: dict[str, Any]):
         user = link.get("user") or {}
         if not isinstance(user, dict):
@@ -821,15 +618,8 @@ class XiaoheiheParser(BaseParser):
         if not name:
             return None
         avatar = str(user.get("avatar") or "") or None
-        desc_parts: list[str] = []
-        desc = self._clean_text(str(link.get("description") or ""))
-        if desc:
-            desc_parts.append(desc)
-        return self.create_author(
-            name=name,
-            avatar_url=avatar,
-            description=" · ".join(desc_parts) if desc_parts else None,
-        )
+        desc = self._clean_text(str(link.get("description") or "")) or None
+        return self.create_author(name=name, avatar_url=avatar, description=desc)
 
     def _build_video_content(self, link: dict[str, Any]):
         if not link.get("has_video"):
@@ -842,8 +632,7 @@ class XiaoheiheParser(BaseParser):
     def _build_video_content_from_url(
         self, video_url: str, cover_url: str | None = None
     ):
-        parsed = urlparse(video_url)
-        path = (parsed.path or "").lower()
+        path = (urlparse(video_url).path or "").lower()
         if path.endswith(".m3u8"):
             task = self.downloader.ytdlp_download_video_relaxed(
                 video_url, headers=self.headers, proxy=self.proxy
@@ -946,6 +735,8 @@ class XiaoheiheParser(BaseParser):
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
+    # ---------------- 签名 ----------------
+
     def _sign_path(self, path: str) -> dict[str, str | int]:
         now = int(time.time())
         nonce = (
@@ -1034,6 +825,29 @@ class XiaoheiheParser(BaseParser):
             mixed.extend(values[4:])
         return mixed
 
+    # ---------------- 请求 ----------------
+
+    async def _api_get(
+        self,
+        path: str,
+        params: dict[str, Any],
+        *,
+        cookies: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """带公共参数和 hkey 签名请求小黑盒接口, 非 ok 状态统一抛 ParseException"""
+        query = {**self.WEB_PARAMS, **self._sign_path(path), **params}
+        payload = await self._request_json(
+            "GET", self.API + path, params=query, cookies=cookies
+        )
+        status = payload.get("status")
+        if status == "ok":
+            return payload
+        if status == "show_captcha":
+            raise ParseException(self.CAPTCHA_TIP)
+        raise ParseException(
+            f"小黑盒接口返回 {status}: {payload.get('msg') or '无详细信息'}"
+        )
+
     async def _request_json(
         self,
         method: str,
@@ -1042,12 +856,7 @@ class XiaoheiheParser(BaseParser):
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         cookies: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        merged_headers = dict(self.headers)
-        if headers:
-            merged_headers.update(headers)
-
         def do_request():
             return curl_requests.request(
                 method,
@@ -1055,7 +864,7 @@ class XiaoheiheParser(BaseParser):
                 params=params,
                 json=json,
                 cookies=cookies,
-                headers=merged_headers,
+                headers=self.api_headers,
                 impersonate="chrome131",
                 proxies={"https": self.proxy, "http": self.proxy}
                 if self.proxy
@@ -1063,35 +872,16 @@ class XiaoheiheParser(BaseParser):
                 timeout=self.cfg.common_timeout,
             )
 
-        response = await asyncio.to_thread(do_request)
         try:
-            return response.json()
+            response = await asyncio.to_thread(do_request)
+        except curl_requests.RequestsError as exc:
+            raise ParseException(f"小黑盒请求失败: {exc}") from exc
+        try:
+            payload = response.json()
         except Exception as exc:
-            raise ParseException(f"小黑盒接口返回非 JSON: {url}") from exc
-
-    async def _request_text(
-        self,
-        url: str,
-        *,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> str:
-        merged_headers = dict(self.headers)
-        if headers:
-            merged_headers.update(headers)
-
-        def do_request():
-            return curl_requests.get(
-                url,
-                params=params,
-                headers=merged_headers,
-                impersonate="chrome131",
-                proxies={"https": self.proxy, "http": self.proxy}
-                if self.proxy
-                else None,
-                timeout=self.cfg.common_timeout,
-                allow_redirects=True,
-            )
-
-        response = await asyncio.to_thread(do_request)
-        return str(response.text)
+            raise ParseException(
+                f"小黑盒接口返回非 JSON (HTTP {response.status_code}): {url}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ParseException(f"小黑盒接口返回格式异常: {url}")
+        return payload

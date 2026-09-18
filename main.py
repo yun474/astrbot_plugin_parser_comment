@@ -19,6 +19,7 @@ from .core.clean import CacheCleaner
 from .core.config import PluginConfig
 from .core.debounce import Debouncer
 from .core.download import Downloader
+from .core.exception import ParseException
 from .core.parsers import BaseParser, BilibiliParser
 from .core.render import Renderer
 from .core.sender import MessageSender
@@ -295,7 +296,17 @@ class ParserPlugin(Star):
                 logger.warning(f"[QQOfficial] 开始解析提示发送失败: {e}")
 
         # 解析
-        parse_res = await self.parser_map[keyword].parse(keyword, searched)
+        parser = self.parser_map[keyword]
+        try:
+            parse_res = await parser.parse(keyword, searched)
+        except ParseException as e:
+            cause = f" ({e.__cause__!r})" if e.__cause__ else ""
+            logger.error(
+                f"[{parser.platform.display_name}] 解析失败: {e.message}{cause} | link: {link}"
+            )
+            if self.cfg.show_download_fail_tip:
+                await event.send(event.plain_result(f"解析失败: {e.message}"))
+            return
 
         # 基于资源ID防抖
         resource_id = parse_res.get_resource_id()

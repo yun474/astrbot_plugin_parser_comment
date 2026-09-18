@@ -1,4 +1,3 @@
-from random import choice
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -30,6 +29,7 @@ class Video(Struct):
     play_addr: PlayAddr
     cover: Cover
     duration: int
+    """时长, 单位: 毫秒"""
 
 
 class Image(Struct):
@@ -45,14 +45,16 @@ class VideoData(Struct):
     video: Video | None = None
 
     @property
-    def image_urls(self) -> list[str]:
-        return [choice(image.url_list) for image in self.images] if self.images else []
+    def image_url_lists(self) -> list[list[str]]:
+        """每张图片的镜像地址列表, 顺序即优先级"""
+        return [image.url_list for image in self.images] if self.images else []
 
     @property
-    def video_url(self) -> str | None:
-        if not self.video or not self.video.play_addr.url_list:
-            return None
-        return choice(self.video.play_addr.url_list).replace("playwm", "play")
+    def video_urls(self) -> list[str]:
+        """play_addr 里的直链, 去水印"""
+        if not self.video:
+            return []
+        return [url.replace("playwm", "play") for url in self.video.play_addr.url_list]
 
     @property
     def play_token(self) -> str | None:
@@ -71,25 +73,48 @@ class VideoData(Struct):
 
     @property
     def cover_url(self) -> str | None:
-        return choice(self.video.cover.url_list) if self.video else None
+        if self.video and self.video.cover.url_list:
+            return self.video.cover.url_list[0]
+        return None
 
     @property
     def avatar_url(self) -> str | None:
-        if avatar := self.author.avatar_thumb:
-            return choice(avatar.url_list)
-        elif avatar := self.author.avatar_medium:
-            return choice(avatar.url_list)
+        for avatar in (self.author.avatar_thumb, self.author.avatar_medium):
+            if avatar and avatar.url_list:
+                return avatar.url_list[0]
         return None
+
+
+class FilterItem(Struct):
+    """视频不可用时的原因说明"""
+
+    filter_reason: str = ""
+    notice: str = ""
+    detail_msg: str = ""
+
+    @property
+    def message(self) -> str:
+        return self.notice or self.detail_msg or self.filter_reason
 
 
 class VideoInfoRes(Struct):
     item_list: list[VideoData] = field(default_factory=list)
+    filter_list: list[FilterItem] = field(default_factory=list)
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        """视频被删除/屏蔽时平台给出的原因"""
+        if self.filter_list:
+            return self.filter_list[0].message or "unknown"
+        return None
 
     @property
     def video_data(self) -> VideoData:
-        if len(self.item_list) == 0:
-            raise ParseException("can't find data in videoInfoRes")
-        return choice(self.item_list)
+        if self.item_list:
+            return self.item_list[0]
+        if reason := self.unavailable_reason:
+            raise ParseException(f"视频不可用: {reason}")
+        raise ParseException("can't find data in videoInfoRes")
 
 
 class VideoOrNotePage(Struct):
@@ -108,11 +133,13 @@ class RouterData(Struct):
     errors: dict[str, Any] | None = None
 
     @property
-    def video_data(self) -> VideoData:
-        if page := self.loader_data.video_page:
-            return page.video_info_res.video_data
-        elif page := self.loader_data.note_page:
-            return page.video_info_res.video_data
+    def video_info_res(self) -> VideoInfoRes:
+        if page := self.loader_data.video_page or self.loader_data.note_page:
+            return page.video_info_res
         raise ParseException(
             "can't find video_(id)/page or note_(id)/page in router data"
         )
+
+    @property
+    def video_data(self) -> VideoData:
+        return self.video_info_res.video_data

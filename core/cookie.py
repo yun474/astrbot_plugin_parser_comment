@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from http import cookiejar
 from http.cookies import SimpleCookie
 from urllib.parse import urlparse
@@ -362,18 +363,14 @@ class CookieJar:
                 expires = 0
                 if morsel["expires"]:
                     try:
+                        # 兼容 "12 Sep 2027" 和 "12-Sep-2027" 两种写法
                         expires = int(
-                            time.mktime(
-                                time.strptime(
-                                    morsel["expires"], "%a, %d-%b-%Y %H:%M:%S %Z"
-                                )
-                            )
+                            parsedate_to_datetime(morsel["expires"]).timestamp()
                         )
-                    except Exception as e:
+                    except (TypeError, ValueError) as e:
                         logger.debug(
                             f"解析 expires 失败: {morsel['expires']}，错误: {e}"
                         )
-                        expires = 0
 
                 existing = next(
                     (
