@@ -20,6 +20,7 @@ from ..base import (
 )
 from .comment_renderer import BiliCommentRenderer
 from .comment_service import BiliCommentService
+from .common import OFFICIAL_CARD_PATTERN, pick_video_by_title
 from .login import BilibiliLogin
 from .poster import BiliPosterRenderer
 
@@ -120,6 +121,12 @@ class BilibiliParser(BaseParser):
         page_num = int(searched.group("page_num") or 1)
 
         return await self.parse_video(avid=avid, page_num=page_num)
+
+    @handle("[卡片消息]", OFFICIAL_CARD_PATTERN)
+    async def _parse_official_card(self, searched: Match[str]):
+        """官 Bot 的小程序分享卡片只有标题没有链接, 拿标题去 B站搜同名视频"""
+        bvid = await self.search_video_by_title(searched.group("title"))
+        return await self.parse_video(bvid=bvid)
 
     @handle("/dynamic/", r"bilibili\.com/dynamic/(?P<dynamic_id>\d+)")
     @handle("t.bili", r"t\.bilibili\.com/(?P<dynamic_id>\d+)")
@@ -450,6 +457,21 @@ class BilibiliParser(BaseParser):
                 for fav in favdata.medias
             ],
         )
+
+    async def search_video_by_title(self, title: str) -> str:
+        """按标题搜视频, 返回 bvid"""
+        from bilibili_api.search import SearchObjectType, search_by_type
+
+        try:
+            result = await search_by_type(
+                title, search_type=SearchObjectType.VIDEO, page=1
+            )
+        except Exception as e:
+            raise ParseException(f"B站搜索失败: {e}") from e
+
+        if bvid := pick_video_by_title(title, result.get("result") or []):
+            return bvid
+        raise ParseException(f"B站没有搜到同名视频: {title}")
 
     async def _get_video(
         self, *, bvid: str | None = None, avid: int | None = None

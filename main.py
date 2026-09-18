@@ -8,7 +8,7 @@ from astrbot.api import logger
 from astrbot.api.event import filter
 from astrbot.api.star import Context, Star
 from astrbot.core import AstrBotConfig
-from astrbot.core.message.components import At, Image, Json
+from astrbot.core.message.components import At, Image, Json, Plain
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -217,12 +217,15 @@ class ParserPlugin(Star):
             return self._tool_result(False, f"解析失败: {e}", url=matched_link)
 
     @staticmethod
-    def _extract_card_url(chain: list) -> str | None:
-        """从消息链里的分享卡片 (小程序 / 结构化消息) 提取链接, 兼容 @ + 卡片的组合"""
+    def _card_text(chain: list) -> str | None:
+        """分享卡片: OneBot 的 Json 段取出链接; 官 Bot 会把小程序卡片转成
+        "[卡片消息] ..." 多行文本 (没有链接), 原样交给解析器按标题匹配"""
         for seg in chain:
             if isinstance(seg, Json) and (url := extract_json_url(seg.data)):
                 logger.debug(f"解析Json组件: {url}")
                 return url
+            if isinstance(seg, Plain) and seg.text.lstrip().startswith("[卡片消息]"):
+                return seg.text
         return None
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -244,13 +247,13 @@ class ParserPlugin(Star):
             return
 
         seg1 = chain[0]
-        card_url = self._extract_card_url(chain)
+        card_text = self._card_text(chain)
         # LLM 工具模式只认工具调用, 但 LLM 看不见分享卡片, 所以卡片直接唤醒解析
-        card_wakeup = bool(self.cfg.llm_tool_mode and card_url)
+        card_wakeup = bool(self.cfg.llm_tool_mode and card_text)
         if self.cfg.llm_tool_mode and not card_wakeup:
             return
 
-        text = card_url or event.message_str
+        text = card_text or event.message_str
         if not text:
             return
 

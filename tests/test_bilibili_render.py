@@ -264,3 +264,38 @@ def test_poster_context(bili, tmp_path):
     assert context["ai_summary"] == "摘要"
     rendered = bili.html_render.TEMPLATES.get_template(template).render(context)
     assert "热门收录" in rendered and "P2/2" in rendered
+
+
+OFFICIAL_CARD = """[卡片消息] 小程序
+摘要: [QQ小程序]良心核弹！智谱免费替全国程序员备份全量代码仓库！| AI日报0918
+preview: https://qq.ugcimg.cn/v1/abc/def
+source: 哔哩哔哩
+source_logo: https://open.gtimg.cn/open/app_icon/00/95/17/76/100951776_100_m.png?t=1
+title: 良心核弹！智谱免费替全国程序员备份全量代码仓库！| AI日报0918"""
+
+
+def test_official_card_pattern_and_title_match(bili):
+    import re
+
+    pattern = re.compile(bili.common.OFFICIAL_CARD_PATTERN)
+    match = pattern.search(OFFICIAL_CARD)
+    assert (
+        match
+        and match.group("title")
+        == "良心核弹！智谱免费替全国程序员备份全量代码仓库！| AI日报0918"
+    )
+    # 别家平台的卡片不归 B站解析器管
+    assert pattern.search(OFFICIAL_CARD.replace("哔哩哔哩", "抖音")) is None
+
+    results = [
+        {"bvid": "BV1other", "title": "智谱 ZCode 偷偷打包 .git 历史"},
+        {
+            "bvid": "BV1exact",
+            "title": '<em class="keyword">良心核弹</em>！<em class="keyword">智谱</em>免费替全国程序员备份全量代码仓库！| AI日报0918',
+        },
+    ]
+    pick = bili.common.pick_video_by_title
+    assert pick(match.group("title"), results) == "BV1exact"
+    # 卡片标题被截断时按前缀匹配
+    assert pick("良心核弹！智谱免费替全国程序员", results) == "BV1exact"
+    assert pick("完全无关的标题", results) is None
