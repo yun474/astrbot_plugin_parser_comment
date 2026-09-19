@@ -160,6 +160,22 @@ def qq_official_upload_limit_mb() -> int:
     return 30
 
 
+def qq_official_force_chunked_upload() -> bool:
+    """让官方适配器对本地视频 / 文件一律走分片上传
+
+    腾讯富媒体接口已不再接受 base64 直传的视频 (返回 "上传URL错误"), 而适配器只对
+    10 MB 以上的文件用分片上传, 这里把它的阈值改成 0。图片走的是另一条接口, 不受影响。
+    """
+    try:
+        from astrbot.core.platform.sources.qqofficial import qqofficial_message_event
+    except ImportError:
+        return False
+    if not hasattr(qqofficial_message_event, "QQOFFICIAL_CHUNKED_UPLOAD_THRESHOLD"):
+        return False
+    qqofficial_message_event.QQOFFICIAL_CHUNKED_UPLOAD_THRESHOLD = 0
+    return True
+
+
 # ================ 插件自定义配置 ==================
 
 
@@ -279,7 +295,8 @@ class PluginConfig(ConfigNode):
             self.max_size = min(self.max_size, official_max_mb * 1024 * 1024)
             logger.info(
                 f"[官Bot] 媒体体积上限 {official_max_mb} MB, "
-                f"强制最低清晰度: {self.force_lowest_quality}"
+                f"强制最低清晰度: {self.force_lowest_quality}, "
+                f"视频分片上传: {qq_official_force_chunked_upload()}"
             )
 
         tz = context.get_config().get("timezone")

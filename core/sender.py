@@ -423,6 +423,9 @@ class MessageSender:
         if not segs:
             return False
 
+        if qq_official_mode:
+            return await self._send_one_media_each(event, segs)
+
         try:
             await event.send(event.chain_result(segs))
             return True
@@ -430,6 +433,29 @@ class MessageSender:
             seg_meta = self._collect_seg_meta(segs)
             logger.error(f"发送解析结果失败： error={e}, segments={seg_meta}")
             return False
+
+    async def _send_one_media_each(
+        self, event: AstrMessageEvent, segs: list[BaseMessageComponent]
+    ) -> bool:
+        """官方接口一条消息只能带一个媒体, 按媒体拆成多条分别发, 一项上传失败不连累其它项"""
+        chunks: list[list[BaseMessageComponent]] = [[]]
+        for seg in segs:
+            is_media = isinstance(seg, (Image, Video, Record, File))
+            if is_media and any(
+                isinstance(s, (Image, Video, Record, File)) for s in chunks[-1]
+            ):
+                chunks.append([])
+            chunks[-1].append(seg)
+
+        sent = False
+        for chunk in chunks:
+            try:
+                await event.send(event.chain_result(chunk))
+                sent = True
+            except Exception as e:
+                seg_meta = self._collect_seg_meta(chunk)
+                logger.error(f"发送解析结果失败： error={e}, segments={seg_meta}")
+        return sent
 
     @staticmethod
     def _collect_seg_meta(segs: list[BaseMessageComponent]) -> list[dict[str, str]]:

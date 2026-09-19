@@ -28,6 +28,8 @@ def bili(monkeypatch: pytest.MonkeyPatch):
         "core.parsers.bilibili.common",
         "core.parsers.bilibili.video",
         "core.parsers.bilibili.poster",
+        "core.parsers.bilibili.web",
+        "core.parsers.bilibili.search",
         "core.parsers.bilibili.comment_renderer",
         "core.parsers.bilibili.comment_service",
     ):
@@ -39,6 +41,7 @@ def bili(monkeypatch: pytest.MonkeyPatch):
         poster=importlib.import_module("core.parsers.bilibili.poster"),
         renderer=importlib.import_module("core.parsers.bilibili.comment_renderer"),
         service=importlib.import_module("core.parsers.bilibili.comment_service"),
+        search=importlib.import_module("core.parsers.bilibili.search"),
     )
 
 
@@ -299,3 +302,101 @@ def test_official_card_pattern_and_title_match(bili):
     # 卡片标题被截断时按前缀匹配
     assert pick("良心核弹！智谱免费替全国程序员", results) == "BV1exact"
     assert pick("完全无关的标题", results) is None
+
+
+class FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def make_web(responses: dict):
+    """responses: url -> 依次返回的 payload 列表 (最后一个重复使用)"""
+    calls = []
+
+    class FakeWeb:
+        def session(self):
+            return FakeSession()
+
+        async def headers(self):
+            return {"User-Agent": "t"}, False
+
+        async def warm_up(self, session, headers, url):
+            calls.append(("warm", url))
+
+        async def get_json(self, session, url, params, headers, *, wbi=False):
+            calls.append((url, wbi))
+            queue = responses[url]
+            return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    return FakeWeb(), calls
+
+
+def test_search_asks_second_endpoint_when_first_has_no_match(bili, monkeypatch):
+    plain, wbi = (url for url, _ in bili.search.BiliSearch.ENDPOINTS)
+    hit = {"bvid": "BV1hit", "title": '<em class="keyword">目标</em>标题'}
+    web, calls = make_web(
+        {
+            plain: [
+                {
+                    "code": 0,
+                    "data": {
+                        "numResults": 1,
+                        "result": [{"bvid": "BV1x", "title": "别的"}],
+                    },
+                }
+            ],
+            wbi: [{"code": 0, "data": {"numResults": 2, "result": [hit]}}],
+        }
+    )
+    search = bili.search.BiliSearch(web)
+
+    assert asyncio.run(search.find_video("目标标题")) == "BV1hit"
+    assert calls == [("warm", search.WARM_UP_URL), (plain, False), (wbi, True)]
+    # 两个接口都答了但都没有同名视频 -> None
+    web, _ = make_web(
+        {
+            plain: [{"code": 0, "data": {"numResults": 0}}],
+            wbi: [
+                {
+                    "code": 0,
+                    "data": {
+                        "numResults": 1,
+                        "result": [{"bvid": "BV1x", "title": "别的"}],
+                    },
+                }
+            ],
+        }
+    )
+    assert asyncio.run(bili.search.BiliSearch(web).find_video("目标标题")) is None
+
+
+def test_search_retries_voucher_then_gives_up(bili, monkeypatch):
+    plain, wbi = (url for url, _ in bili.search.BiliSearch.ENDPOINTS)
+    voucher = {"code": 0, "data": {"v_voucher": "voucher_xxx"}}
+    hit = {
+        "code": 0,
+        "data": {"numResults": 1, "result": [{"bvid": "BV1hit", "title": "目标标题"}]},
+    }
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(bili.search.asyncio, "sleep", no_sleep)
+
+    # 第一轮两个接口都被风控, 第二轮 WBI 放行
+    web, calls = make_web({plain: [voucher, voucher, voucher], wbi: [voucher, hit]})
+    assert asyncio.run(bili.search.BiliSearch(web).find_video("目标标题")) == "BV1hit"
+    assert [c for c in calls if c[0] == wbi] == [(wbi, True), (wbi, True)]
+
+    # 一直被风控 -> 报错而不是当成没搜到
+    web, calls = make_web(
+        {plain: [voucher], wbi: [{"code": -412, "message": "请求被拦截"}]}
+    )
+    with pytest.raises(RuntimeError, match="风控"):
+        asyncio.run(bili.search.BiliSearch(web).find_video("目标标题"))
+    assert (
+        len([c for c in calls if c[0] != "warm"]) == 2 * bili.search.BiliSearch.ATTEMPTS
+    )

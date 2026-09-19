@@ -3,86 +3,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-import time
-import urllib.parse
 from pathlib import Path
 
 from aiohttp import ClientTimeout
 from astrbot.api import logger
-from curl_cffi.requests import AsyncSession as CurlAsyncSession
-from msgspec import json as msgjson
 
 from ...data import ImageContent
 from ...exception import DownloadLimitException
 from .comment_renderer import BiliComment, BiliCommentRenderer
 from .common import bfs_thumb
-
-MIXIN_KEY_ENC_TAB = [
-    46,
-    47,
-    18,
-    2,
-    53,
-    8,
-    23,
-    32,
-    15,
-    50,
-    10,
-    31,
-    58,
-    3,
-    45,
-    35,
-    27,
-    43,
-    5,
-    49,
-    33,
-    9,
-    42,
-    19,
-    29,
-    28,
-    14,
-    39,
-    12,
-    38,
-    41,
-    13,
-    37,
-    48,
-    7,
-    16,
-    24,
-    55,
-    40,
-    61,
-    26,
-    17,
-    0,
-    1,
-    60,
-    51,
-    30,
-    4,
-    22,
-    25,
-    54,
-    21,
-    56,
-    59,
-    6,
-    63,
-    57,
-    62,
-    11,
-    36,
-    20,
-    34,
-    44,
-    52,
-]
+from .web import BiliWebClient
 
 
 class BiliCommentService:
@@ -96,7 +26,6 @@ class BiliCommentService:
     API_URL = "https://api.bilibili.com/x/v2/reply/main"
     WBI_API_URL = "https://api.bilibili.com/x/v2/reply/wbi/main"
     LEGACY_API_URL = "https://api.bilibili.com/x/v2/reply"
-    NAV_API_URL = "https://api.bilibili.com/x/web-interface/nav"
     COMMENT_TYPE_VIDEO = 1
     MAX_FETCH_PAGES = 5
     COMMENT_PAGE_SIZE = 20
@@ -113,9 +42,11 @@ class BiliCommentService:
         qr_check_max: int = 4,
         show_replies: bool = True,
         fetch_timeout: float = 8.0,
+        web: BiliWebClient | None = None,
     ):
         self.parser = parser
         self.renderer = renderer
+        self.web = web or BiliWebClient(parser, timeout=fetch_timeout)
         self.enabled = enabled
         self.show_replies = show_replies
         self.comment_limit = max(0, min(int(comment_limit or 0), 20))
@@ -137,8 +68,6 @@ class BiliCommentService:
             re.IGNORECASE,
         )
         self._qr_detect_cache: dict[str, bool] = {}
-        self._wbi_mixin_key: str | None = None
-        self._wbi_mixin_key_expire = 0.0
 
     @property
     def headers(self) -> dict[str, str]:
@@ -147,115 +76,6 @@ class BiliCommentService:
         if cookies:
             headers["Cookie"] = str(cookies).strip()
         return headers
-
-    async def _build_request_headers(self) -> tuple[dict[str, str], bool]:
-        """构造评论接口请求头，并复用扫码登录保存的凭证。"""
-        headers = self.parser.headers.copy()
-        cookie_header = ""
-        authenticated = False
-
-        try:
-            credential = await self.parser.login.credential
-            if credential:
-                cookies = credential.get_cookies() or {}
-                cookie_header = "; ".join(
-                    f"{name}={value}"
-                    for name, value in cookies.items()
-                    if value is not None
-                )
-                authenticated = bool(cookies.get("SESSDATA"))
-        except Exception as e:
-            logger.warning(f"[Bilibili-comments] 读取登录凭证失败: {e}")
-
-        if not cookie_header:
-            raw_cookies = getattr(self.parser.mycfg, "cookies", None)
-            if raw_cookies:
-                cookie_header = str(raw_cookies).strip()
-                authenticated = bool(
-                    re.search(r"(?:^|;\s*)SESSDATA=", cookie_header, re.IGNORECASE)
-                )
-
-        if cookie_header:
-            headers["Cookie"] = cookie_header
-        return headers, authenticated
-
-    @staticmethod
-    def _wbi_key_part(url: str | None) -> str | None:
-        if not url:
-            return None
-        name = str(url).rsplit("/", 1)[-1].split(".", 1)[0].strip()
-        return name or None
-
-    async def _get_wbi_mixin_key(
-        self,
-        session: CurlAsyncSession,
-        headers: dict[str, str],
-    ) -> str | None:
-        now = time.time()
-        if self._wbi_mixin_key and now < self._wbi_mixin_key_expire:
-            return self._wbi_mixin_key
-
-        try:
-            resp = await session.get(
-                self.NAV_API_URL,
-                headers=headers,
-                proxy=self.parser.proxy,
-                timeout=self.fetch_timeout,
-            )
-            if resp.status_code != 200:
-                return None
-            payload = msgjson.decode(resp.content)
-            wbi_img = (payload.get("data") or {}).get("wbi_img") or {}
-            img_key = self._wbi_key_part(wbi_img.get("img_url"))
-            sub_key = self._wbi_key_part(wbi_img.get("sub_url"))
-            raw_key = f"{img_key or ''}{sub_key or ''}"
-            if len(raw_key) < 64:
-                return None
-
-            mixin_key = "".join(raw_key[index] for index in MIXIN_KEY_ENC_TAB)[:32]
-            self._wbi_mixin_key = mixin_key
-            self._wbi_mixin_key_expire = now + 12 * 60 * 60
-            return mixin_key
-        except Exception as e:
-            logger.debug(f"[Bilibili-comments] WBI key 获取失败: {e}")
-            return None
-
-    @staticmethod
-    def _sign_wbi_params(params: dict, mixin_key: str) -> dict:
-        signed = dict(params)
-        signed["wts"] = int(time.time())
-
-        filtered = {}
-        for key, value in signed.items():
-            if isinstance(value, str):
-                value = "".join(ch for ch in value if ch not in "!'()*")
-            filtered[key] = value
-
-        query = urllib.parse.urlencode(sorted(filtered.items()))
-        filtered["w_rid"] = hashlib.md5(f"{query}{mixin_key}".encode()).hexdigest()
-        return filtered
-
-    async def _get_comment_json(
-        self,
-        session: CurlAsyncSession,
-        url: str,
-        params: dict,
-        headers: dict[str, str],
-    ) -> dict:
-        resp = await session.get(
-            url,
-            params=params,
-            headers=headers,
-            proxy=self.parser.proxy,
-            timeout=self.fetch_timeout,
-        )
-        if resp.status_code != 200 or not resp.content:
-            return {}
-        try:
-            payload = msgjson.decode(resp.content)
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
 
     @staticmethod
     def _normalize_legacy_reply_page(block: dict, page_num: int) -> dict:
@@ -279,13 +99,14 @@ class BiliCommentService:
 
     async def _fetch_comment_page(
         self,
-        session: CurlAsyncSession,
+        session,
         *,
         oid: int,
         type_: int,
         next_cursor: int,
         headers: dict[str, str],
     ) -> dict:
+        """依次尝试 WBI 接口、普通 main 接口和旧分页接口, 返回评论页 data"""
         base_params = {
             "oid": oid,
             "type": type_,
@@ -293,41 +114,23 @@ class BiliCommentService:
             "next": next_cursor,
             "ps": self.COMMENT_PAGE_SIZE,
         }
-
-        mixin_key = await self._get_wbi_mixin_key(session, headers)
-        if mixin_key:
+        for url, wbi in ((self.WBI_API_URL, True), (self.API_URL, False)):
             try:
-                payload = await self._get_comment_json(
-                    session,
-                    self.WBI_API_URL,
-                    self._sign_wbi_params(base_params, mixin_key),
-                    headers,
+                payload = await self.web.get_json(
+                    session, url, base_params, headers, wbi=wbi
                 )
                 if payload.get("code") == 0:
                     return payload.get("data") or {}
                 logger.debug(
-                    "[Bilibili-comments] WBI 接口失败: "
-                    f"oid={oid}, code={payload.get('code')}, "
-                    f"message={payload.get('message')}"
+                    f"[Bilibili-comments] 接口失败: {url}, oid={oid}, "
+                    f"code={payload.get('code')}, message={payload.get('message')}"
                 )
             except Exception as e:
-                logger.debug(f"[Bilibili-comments] WBI 接口异常: oid={oid}, {e}")
-
-        try:
-            payload = await self._get_comment_json(
-                session,
-                self.API_URL,
-                base_params,
-                headers,
-            )
-            if payload.get("code") == 0:
-                return payload.get("data") or {}
-        except Exception as e:
-            logger.debug(f"[Bilibili-comments] main 接口异常: oid={oid}, {e}")
+                logger.debug(f"[Bilibili-comments] 接口异常: {url}, oid={oid}, {e}")
 
         try:
             page_num = max(1, int(next_cursor or 1))
-            payload = await self._get_comment_json(
+            payload = await self.web.get_json(
                 session,
                 self.LEGACY_API_URL,
                 {
@@ -524,7 +327,7 @@ class BiliCommentService:
         all_count = 0
         qr_check_counter = [0]
 
-        headers, authenticated = await self._build_request_headers()
+        headers, authenticated = await self.web.headers()
         referer = f"https://www.bilibili.com/video/av{oid}"
         headers["Referer"] = referer
 
@@ -534,19 +337,10 @@ class BiliCommentService:
                 or len(strict_list) + len(relaxed_list) >= self.comment_limit
             )
 
-        # B站评论接口会对 aiohttp 的普通 TLS 指纹返回 -352，且 HTTP 状态仍是
-        # 200。项目已依赖 curl_cffi，这里先访问视频页取得 buvid，再复用同一
-        # 浏览器指纹会话抓评论，避免把风控响应误判成“评论区为空”。
-        async with CurlAsyncSession(impersonate="chrome131") as session:
-            try:
-                await session.get(
-                    referer,
-                    headers=headers,
-                    proxy=self.parser.proxy,
-                    timeout=self.fetch_timeout,
-                )
-            except Exception as e:
-                logger.debug(f"[Bilibili-comments] 视频页预热失败，继续尝试接口: {e}")
+        # 评论接口对普通 TLS 指纹返回 -352 且 HTTP 仍是 200, 用浏览器指纹会话并先
+        # 访问视频页拿 buvid, 避免把风控响应误判成“评论区为空”。
+        async with self.web.session() as session:
+            await self.web.warm_up(session, headers, referer)
 
             for _ in range(self.MAX_FETCH_PAGES):
                 if is_end or enough():

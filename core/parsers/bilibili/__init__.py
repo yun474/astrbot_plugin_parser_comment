@@ -20,9 +20,11 @@ from ..base import (
 )
 from .comment_renderer import BiliCommentRenderer
 from .comment_service import BiliCommentService
-from .common import OFFICIAL_CARD_PATTERN, pick_video_by_title
+from .common import OFFICIAL_CARD_PATTERN
 from .login import BilibiliLogin
 from .poster import BiliPosterRenderer
+from .search import BiliSearch
+from .web import BiliWebClient
 
 # 选择客户端
 select_client("curl_cffi")
@@ -57,6 +59,9 @@ class BilibiliParser(BaseParser):
             for c in (self.mycfg.video_codec_list or ["AVC"])
         ]
         self.login = BilibiliLogin(config)
+        # 评论、搜索共用一个带指纹和登录态的 Web 客户端
+        self.web = BiliWebClient(self)
+        self.search = BiliSearch(self.web)
         # 海报和评论区都是 HTML 模板渲染, 共用解析器基类里的浏览器
         self.poster = (
             BiliPosterRenderer(self.html_renderer, config.cache_dir, config.timezone)
@@ -75,6 +80,7 @@ class BilibiliParser(BaseParser):
             enable_qr_filter=bool(self.mycfg.comment_filter_qr),
             qr_check_max=4 if qr_check_max is None else int(qr_check_max),
             show_replies=self.mycfg.comment_show_replies is not False,
+            web=self.web,
         )
 
     @handle("b23.tv", r"b23\.tv/[A-Za-z\d\._?%&+\-=/#]+")
@@ -460,18 +466,13 @@ class BilibiliParser(BaseParser):
 
     async def search_video_by_title(self, title: str) -> str:
         """按标题搜视频, 返回 bvid"""
-        from bilibili_api.search import SearchObjectType, search_by_type
-
         try:
-            result = await search_by_type(
-                title, search_type=SearchObjectType.VIDEO, page=1
-            )
+            bvid = await self.search.find_video(title)
         except Exception as e:
             raise ParseException(f"B站搜索失败: {e}") from e
-
-        if bvid := pick_video_by_title(title, result.get("result") or []):
-            return bvid
-        raise ParseException(f"B站没有搜到同名视频: {title}")
+        if not bvid:
+            raise ParseException(f"B站没有搜到同名视频: {title}")
+        return bvid
 
     async def _get_video(
         self, *, bvid: str | None = None, avid: int | None = None

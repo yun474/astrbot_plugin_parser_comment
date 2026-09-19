@@ -69,6 +69,7 @@ def comment_module(monkeypatch: pytest.MonkeyPatch):
         "core.utils",
         "core.html_render",
         "core.parsers.bilibili.common",
+        "core.parsers.bilibili.web",
         "core.parsers.bilibili.comment_renderer",
         "core.parsers.bilibili.comment_service",
     ):
@@ -102,7 +103,7 @@ def test_comment_headers_use_saved_qr_login_credential(comment_module):
     parser = make_parser(credential=credential)
     service = module.BiliCommentService(parser, renderer=object())
 
-    headers, authenticated = asyncio.run(service._build_request_headers())
+    headers, authenticated = asyncio.run(service.web.headers())
 
     assert authenticated is True
     assert "SESSDATA=saved-session" in headers["Cookie"]
@@ -117,7 +118,7 @@ def test_comment_headers_fall_back_to_config_cookie(comment_module):
     )
     service = module.BiliCommentService(parser, renderer=object())
 
-    headers, authenticated = asyncio.run(service._build_request_headers())
+    headers, authenticated = asyncio.run(service.web.headers())
 
     assert authenticated is True
     assert headers["Cookie"] == "SESSDATA=config-session; bili_jct=config-csrf"
@@ -170,8 +171,8 @@ def test_fetch_comments_includes_top_replies(comment_module, monkeypatch):
             "cursor": {"is_end": True, "next": 1, "all_count": 4},
         }
 
-    monkeypatch.setattr(module, "CurlAsyncSession", FakeSession)
-    monkeypatch.setattr(service, "_build_request_headers", fake_headers)
+    monkeypatch.setattr(service.web, "session", FakeSession)
+    monkeypatch.setattr(service.web, "headers", fake_headers)
     monkeypatch.setattr(service, "_fetch_comment_page", fake_page)
 
     comments, total = asyncio.run(service._fetch_comments(123, 1))
