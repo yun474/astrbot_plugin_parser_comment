@@ -63,10 +63,13 @@ class ParserPlugin(Star):
 
     async def terminate(self):
         """插件卸载时触发"""
+        unique_parsers = set(self.parser_map.values())
+        for parser in unique_parsers:
+            if service := getattr(parser, "comment_service", None):
+                await service.image_cache.close()
         # 关下载器里的会话
         await self.downloader.close()
         # 关所有解析器里的会话 (去重后的实例)
-        unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
             await parser.close_session()
         # 关 HTML 渲染用的浏览器

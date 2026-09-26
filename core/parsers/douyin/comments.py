@@ -6,10 +6,12 @@ import asyncio
 import hashlib
 import json
 from datetime import datetime
+from time import monotonic
 from urllib.parse import parse_qs, urlparse
 
 from astrbot.api import logger
 
+from ...comment_utils import CommentImageCache, download_comment_assets
 from ...data import ImageContent, SendGroup
 from ...exception import DownloadLimitException
 from ...html_render import image_data_uri
@@ -41,7 +43,8 @@ class DouyinCommentService:
         )
         self.show_replies = cfg.comment_show_replies is not False
         self.merge = bool(cfg.comment_merge_with_video)
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Semaphore(2)
+        self.image_cache = CommentImageCache()
 
     def build_send_groups(
         self, contents, vid: str, title: str, author: str, *, kind: str = "video"
@@ -227,22 +230,29 @@ class DouyinCommentService:
             if not url:
                 return None
             try:
-                async with asyncio.timeout(8):
-                    path = await self.parser.downloader.download_img(
-                        url,
-                        headers={"Referer": "https://www.douyin.com/"},
-                        proxy=self.parser.proxy,
-                    )
+                path = await self.parser.downloader.download_img(
+                    url,
+                    headers={"Referer": "https://www.douyin.com/"},
+                    proxy=self.parser.proxy,
+                )
                 return await asyncio.to_thread(image_data_uri, path)
             except Exception:  # noqa: BLE001 - 单张图片失败不影响评论文字
                 return None
 
-        async def attach(comment):
-            comment["avatar"], *pictures = await asyncio.gather(
-                download(comment["avatar_url"]),
-                *(download(url) for url in comment["picture_urls"]),
-            )
-            comment["pictures"] = [picture for picture in pictures if picture]
+        all_comments = [c for root in comments for c in [root, *root["replies"]]]
+        assets = await download_comment_assets(
+            [
+                url
+                for c in all_comments
+                for url in [c["avatar_url"], *c["picture_urls"]]
+            ],
+            download,
+        )
+        for comment in all_comments:
+            comment["avatar"] = assets.get(comment["avatar_url"])
+            comment["pictures"] = [
+                uri for url in comment["picture_urls"] if (uri := assets.get(url))
+            ]
             comment["date"] = (
                 datetime.fromtimestamp(
                     comment["time"], self.parser.cfg.timezone
@@ -251,30 +261,45 @@ class DouyinCommentService:
                 else ""
             )
 
-        await asyncio.gather(
-            *(attach(c) for root in comments for c in [root, *root["replies"]])
-        )
-
     async def _build_image(
         self, vid: str, title: str, author: str, *, kind: str = "video"
     ):
         try:
+            return await self.image_cache.get(
+                (vid, kind, title, author, self.limit, self.show_replies),
+                lambda: self._render_image(vid, title, author, kind=kind),
+            )
+        except DownloadLimitException:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"[抖音评论] 跳过评论区 ({type(e).__name__}): {str(e)[:200]}"
+            )
+            raise DownloadLimitException("抖音评论区暂不可用") from e
+
+    async def _render_image(self, vid, title, author, *, kind):
+        started = monotonic()
+        stage = "获取评论"
+        try:
             async with self._lock:
                 comments, total = await self._fetch_comments(vid, kind=kind)
+            fetched = monotonic()
             if not comments:
                 raise DownloadLimitException("抖音评论区为空或不可见")
             seed = json.dumps(
-                [title, author, total, self.show_replies, comments],
+                [2, title, author, total, self.show_replies, comments],
                 ensure_ascii=False,
                 sort_keys=True,
             )
             digest = hashlib.sha256(seed.encode()).hexdigest()[:16]
             path = self.parser.cfg.cache_dir / f"douyin_comments_{vid}_{digest}.jpg"
-            if path.exists() and path.stat().st_size > 100:
+            if self.image_cache.is_fresh(path):
                 return path
-            async with asyncio.timeout(30):
-                await self._attach_assets(comments)
-            return await self.parser.html_renderer.render(
+            stage = "下载配图"
+            await self._attach_assets(comments)
+            attached = monotonic()
+            stage = "截图"
+            result = await self.parser.html_renderer.render(
                 "douyin_comments.html",
                 {
                     "width": 720,
@@ -286,10 +311,12 @@ class DouyinCommentService:
                 },
                 path,
             )
-        except DownloadLimitException:
-            raise
-        except Exception as e:
-            logger.warning(
-                f"[抖音评论] 跳过评论区 ({type(e).__name__})：请检查 Chromium、网络或更新抖音 Cookies"
+            logger.debug(
+                f"[抖音评论] {vid} 获取 {fetched - started:.2f}s / "
+                f"配图 {attached - fetched:.2f}s / 截图 {monotonic() - attached:.2f}s"
             )
-            raise DownloadLimitException("抖音评论区暂不可用") from e
+            return result
+        finally:
+            logger.debug(
+                f"[抖音评论] {vid} 结束于{stage}，耗时 {monotonic() - started:.2f}s"
+            )

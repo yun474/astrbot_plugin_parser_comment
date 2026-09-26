@@ -116,6 +116,10 @@ B站访客态评论接口目前通常只返回 3 条，并会把分页标记为�
 - `本地 Playwright`：只用本地浏览器。插件依赖里带了 `playwright` 包，第一次渲染时会自动执行 `playwright install chromium`（约 150 MB，只需一次）。Linux / Docker 缺系统库时请手动执行 `playwright install --with-deps chromium`；想显示 Emoji 的话装一下 `fonts-noto-color-emoji`。
 - `AstrBot 网络渲染`：只用网络接口。
 
+插件内置 Noto Sans Math / Noto Sans Symbols 2 符号字体，补充 `=⩌⩊⩌=` 等颜文字中的数学和冷门符号。HTML 海报、评论图以及默认 PIL 卡片均可使用，无需在 Docker 中另外安装这两款字体；网络渲染会将符号字体内联到 HTML。字体来源和授权见 [字体说明](core/resources/fonts/README.md)。这不代表覆盖所有 Unicode 字符，彩色 Emoji 仍沿用原有方式。
+
+B站与抖音评论图在插件运行期间缓存两分钟（最多 128 个作品/配置组合），同一作品同时请求会共用一次生成；缓存期内评论与点赞数可能稍有延迟。配图按 URL 去重，最多六张并发下载，整批最多等待八秒，失败或超时的图片省略并保留文字。Debug 日志会分别记录获取评论、下载配图、截图耗时，便于区分接口慢和渲染慢。首次安装 Chromium 不计入通常的渲染速度，评论等待超时后浏览器安装仍会继续。
+
 ### 分享卡片
 
 QQ 里直接分享的 B站小程序卡片、PC 端的结构化分享卡片都能触发解析，卡片前面带 @ 或文字也没关系。LLM 工具模式下 LLM 看不见卡片内容，所以卡片会直接唤醒解析（不贴表情、不发提示，媒体直接发到当前会话）。

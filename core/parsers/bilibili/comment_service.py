@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
+from dataclasses import asdict
 from pathlib import Path
+from time import monotonic
 
 from aiohttp import ClientTimeout
 from astrbot.api import logger
 
+from ...comment_utils import CommentImageCache, download_comment_assets
 from ...data import ImageContent
 from ...exception import DownloadLimitException
 from .comment_renderer import BiliComment, BiliCommentRenderer
@@ -54,6 +58,7 @@ class BiliCommentService:
         self.enable_qr_filter = enable_qr_filter
         self.qr_check_max = max(0, int(qr_check_max or 0))
         self.fetch_timeout = fetch_timeout
+        self.image_cache = CommentImageCache()
 
         self._ad_kw_re = re.compile(
             r"(微信|v信|vx|加微|私信|进群|福利|代理|兼职|看片|资源|加我|联系我|返利|推广|引流|合作)",
@@ -174,6 +179,7 @@ class BiliCommentService:
             ),
             name=f"bili_comment_render_{oid}",
         )
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
         return [ImageContent(task)]
 
     @staticmethod
@@ -451,11 +457,12 @@ class BiliCommentService:
                 for text, (url, _) in comment.emotes.items():
                     jobs.append(("emote", comment, text, url))
 
-        cover_path, results = await asyncio.gather(
-            self._download_image(video_cover),
-            asyncio.gather(*(self._download_image(job[3]) for job in jobs)),
+        assets = await download_comment_assets(
+            [video_cover, *(job[3] for job in jobs)],
+            self._download_image,
         )
-        for (kind, comment, key, _), path in zip(jobs, results):
+        for kind, comment, key, url in jobs:
+            path = assets.get(url)
             if path is None:
                 continue
             if kind == "avatar":
@@ -464,16 +471,7 @@ class BiliCommentService:
                 comment.pic_paths.append(path)
             else:
                 comment.emote_paths[key] = path
-        return cover_path
-
-    @staticmethod
-    def _cache_key(oid: int, comments: list[BiliComment], limit: int) -> str:
-        seed = "|".join(
-            f"{c.rpid}:{c.like}:{len(c.replies)}"
-            for root in comments
-            for c in root.iter_all()
-        )
-        return hashlib.md5(f"{oid}:{limit}:{seed}".encode("utf-8")).hexdigest()[:10]
+        return assets.get(video_cover)
 
     async def _build_comment_image(
         self,
@@ -485,19 +483,71 @@ class BiliCommentService:
         up_name: str,
     ) -> Path:
         try:
-            comments, total = await self._fetch_comments(oid, type_)
+            return await self.image_cache.get(
+                (
+                    oid,
+                    type_,
+                    video_title,
+                    video_cover,
+                    up_name,
+                    self.comment_limit,
+                    self.show_replies,
+                ),
+                lambda: self._render_comment_image(
+                    oid,
+                    type_,
+                    video_title=video_title,
+                    video_cover=video_cover,
+                    up_name=up_name,
+                ),
+            )
+        except DownloadLimitException:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"[Bilibili-comments] 评论区渲染跳过 ({type(e).__name__}): {str(e)[:200]}"
+            )
+            raise DownloadLimitException("评论区渲染失败") from e
+
+    async def _render_comment_image(
+        self, oid, type_, *, video_title, video_cover, up_name
+    ) -> Path:
+        started = monotonic()
+        stage = "获取评论"
+        try:
+            async with asyncio.timeout(25):
+                comments, total = await self._fetch_comments(oid, type_)
+            fetched = monotonic()
             if not comments:
                 raise DownloadLimitException("评论区为空或不可见")
 
-            cache_key = self._cache_key(oid, comments, self.comment_limit)
+            # 包含正文和页面信息，避免编辑评论、标题或切换楼中楼后误用旧图。
+            seed = json.dumps(
+                [
+                    2,
+                    oid,
+                    type_,
+                    video_title,
+                    video_cover,
+                    up_name,
+                    total,
+                    [asdict(c) for c in comments],
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            cache_key = hashlib.sha256(seed.encode()).hexdigest()[:16]
             out_path = (
                 self.parser.cfg.cache_dir / f"bili_comments_{oid}_{cache_key}.jpg"
             )
-            if out_path.exists() and out_path.stat().st_size > 100:
+            if self.image_cache.is_fresh(out_path):
                 return out_path
 
+            stage = "下载配图"
             cover_path = await self._attach_assets(comments, video_cover)
-            return await self.renderer.render(
+            attached = monotonic()
+            stage = "截图"
+            result = await self.renderer.render(
                 out_path,
                 comments,
                 title=video_title,
@@ -505,8 +555,12 @@ class BiliCommentService:
                 total=total,
                 cover_path=cover_path,
             )
-        except DownloadLimitException:
-            raise
-        except Exception as e:
-            logger.warning(f"[Bilibili-comments] 评论区渲染跳过: {e}")
-            raise DownloadLimitException("评论区渲染失败") from e
+            logger.debug(
+                f"[Bilibili-comments] {oid} 获取 {fetched - started:.2f}s / "
+                f"配图 {attached - fetched:.2f}s / 截图 {monotonic() - attached:.2f}s"
+            )
+            return result
+        finally:
+            logger.debug(
+                f"[Bilibili-comments] {oid} 结束于{stage}，耗时 {monotonic() - started:.2f}s"
+            )

@@ -12,7 +12,6 @@ pytest.importorskip("yt_dlp")
 
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-
 from stubs import install_stubs
 
 
@@ -34,6 +33,14 @@ def make_app(hits: dict[str, int]):
             return web.Response(body=payload)
         if name == "slow":
             await asyncio.sleep(0.5)
+            return web.Response(body=payload)
+        if name == "stream" and hits[name] == 1:
+            response = web.StreamResponse()
+            await response.prepare(request)
+            await response.write(payload)
+            await asyncio.sleep(0.5)
+            return response
+        if name == "stream":
             return web.Response(body=payload)
         if name == "zero":
             return web.Response(body=b"")
@@ -84,6 +91,24 @@ def test_backup_url_used_after_primary_fails(download_module, tmp_path):
     assert path.read_bytes() == b"x" * 2048
     assert hits == {"403": 1, "ok": 1}
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_cancelled_download_removes_partial_and_can_retry(download_module, tmp_path):
+    async def scenario(downloader, base):
+        task = downloader.download_img(f"{base}/stream", img_name="cancel.bin")
+        async with asyncio.timeout(2):
+            while not list(tmp_path.glob("*.part")):
+                await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not list(tmp_path.glob("*.part"))
+        assert not downloader._inflight
+        path = await downloader.download_img(f"{base}/stream", img_name="cancel.bin")
+        assert path.read_bytes() == b"x" * 2048
+
+    _, hits = run(download_module, tmp_path, scenario)
+    assert hits == {"stream": 2}
 
 
 def test_all_urls_fail_reports_reason(download_module, tmp_path):

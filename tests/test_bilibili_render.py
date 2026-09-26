@@ -54,6 +54,41 @@ class FakeHtml:
         return out_path
 
 
+def test_comment_image_cache_reuses_work_and_changes_with_message(bili, tmp_path):
+    from unittest.mock import AsyncMock
+
+    async def run():
+        parser = SimpleNamespace(cfg=SimpleNamespace(cache_dir=tmp_path))
+        svc = bili.service.BiliCommentService(parser, FakeHtml())
+        c = bili.renderer.BiliComment(
+            rpid="1", mid=1, uname="u", message="first", avatar_url=""
+        )
+        svc._fetch_comments = AsyncMock(return_value=([c], 1))
+        svc._attach_assets = AsyncMock(return_value=None)
+
+        async def render(path, *args, **kwargs):
+            path.write_bytes(b"image" * 30)
+            return path
+
+        svc.renderer.render = AsyncMock(side_effect=render)
+
+        async def build():
+            return await svc._build_comment_image(
+                123, 1, video_title="标题", video_cover=None, up_name="UP"
+            )
+
+        first, second = await asyncio.gather(build(), build())
+        assert first == second == await build()
+        svc._fetch_comments.assert_awaited_once()
+        svc.renderer.render.assert_awaited_once()
+        svc.image_cache._ready.clear()
+        c.message = "edited"
+        assert await build() != first
+        await svc.image_cache.close()
+
+    asyncio.run(run())
+
+
 def reply(rpid, message, *, mid=1, sub=(), **extra):
     item = {
         "rpid": rpid,
@@ -143,7 +178,9 @@ def test_parse_reply_reads_native_fields(bili):
 
 def test_message_html_renders_emote_and_at(bili, tmp_path):
     emote = tmp_path / "doge.png"
-    emote.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 8)
+    from PIL import Image
+
+    Image.new("RGB", (16, 16), "yellow").save(emote)
     comment = bili.renderer.BiliComment(
         rpid="1",
         mid=1,

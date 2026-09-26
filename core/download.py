@@ -1,4 +1,5 @@
 from asyncio import (
+    CancelledError,
     Task,
     TimeoutError,
     create_task,
@@ -16,10 +17,9 @@ from typing import Any, ParamSpec, TypeVar
 import aiofiles
 import yt_dlp
 from aiohttp import ClientError, ClientPayloadError, ClientSession, ClientTimeout
+from astrbot.api import logger
 from msgspec import Struct, convert
 from tqdm.asyncio import tqdm
-
-from astrbot.api import logger
 
 from .config import PluginConfig
 from .constants import COMMON_HEADER
@@ -208,6 +208,9 @@ class Downloader:
 
                 await to_thread(part_path.replace, file_path)
                 return file_path
+            except CancelledError:
+                await safe_unlink(part_path)
+                raise
             except (ZeroSizeException, SizeLimitException) as exc:
                 await safe_unlink(part_path)
                 if isinstance(exc, ZeroSizeException):

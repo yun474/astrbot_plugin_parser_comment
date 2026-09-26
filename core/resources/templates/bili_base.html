@@ -7,6 +7,12 @@
   font-family: "PluginFont";
   src: url("{{ font_url }}");
 }
+{% for url in symbol_font_urls %}
+@font-face {
+  font-family: "PluginSymbols{{ loop.index }}";
+  src: url("{{ url }}") format("truetype");
+}
+{% endfor %}
 :root {
   --brand: #FB7299;
   --blue: #00AEEC;
@@ -30,8 +36,9 @@ html, body {
   background: var(--bg);
   color: var(--text1);
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
-    "Source Han Sans SC", "PluginFont", "Helvetica Neue", Arial, sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+    "Source Han Sans SC", "PluginFont", "Helvetica Neue", Arial,
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+    "PluginSymbols1", "PluginSymbols2", sans-serif;
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;

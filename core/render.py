@@ -4,18 +4,20 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from io import BytesIO
+from itertools import groupby
 from pathlib import Path
 from typing import ClassVar, ParamSpec, TypeVar
 
 import aiofiles
 from apilmoji import Apilmoji, EmojiCDNSource
 from apilmoji.core import get_font_height
-from PIL import Image, ImageDraw, ImageFont
-
+from apilmoji.helper import NodeType, parse_lines
 from astrbot.api import logger
+from PIL import Image, ImageDraw, ImageFont
 
 from .config import PluginConfig
 from .data import GraphicsContent, ParseResult
+from .fonts import symbol_fonts
 
 # 定义类型变量
 P = ParamSpec("P")
@@ -64,6 +66,7 @@ class FontInfo:
     font: ImageFont.FreeTypeFont
     line_height: int
     cjk_width: int
+    fallbacks: tuple = ()
 
     def __hash__(self) -> int:
         """实现哈希方法以支持 @lru_cache"""
@@ -75,7 +78,13 @@ class FontInfo:
         # bbox = self.font.getbbox(char)
         # width = int(bbox[2] - bbox[0])
         # return width
-        return int(self.font.getlength(char))
+        return int(self.font_for(char).getlength(char))
+
+    def font_for(self, char):
+        for chars, font in self.fallbacks:
+            if char in chars:
+                return font
+        return self.font
 
     def get_char_width_fast(self, char: str) -> int:
         """快速获取单个字符宽度"""
@@ -130,6 +139,7 @@ class FontSet:
                 font=font,
                 line_height=get_font_height(font),
                 cjk_width=size,
+                fallbacks=symbol_fonts(size),
             )
         return FontSet(**font_infos)
 
@@ -367,6 +377,37 @@ class Renderer:
         fill: Color,
     ) -> int:
         """绘制文本"""
+        if any(font.font_for(c) is not font.font for line in lines for c in line):
+            draw = ImageDraw.Draw(ctx.image)
+            start_x, y = xy
+            ascent = font.font.getmetrics()[0]
+            for nodes in parse_lines(lines):
+                x = start_x
+                for node in nodes:
+                    if node.type is NodeType.EMOJI:
+                        await Apilmoji.text(
+                            ctx.image,
+                            (int(x), y),
+                            [node.content],
+                            font.font,
+                            fill=fill,
+                            line_height=font.line_height,
+                            source=self.EMOJI_SOURCE,
+                        )
+                        x += font.font.size
+                    else:
+                        for run_font, chars in groupby(node.content, font.font_for):
+                            run = "".join(chars)
+                            draw.text(
+                                (x, y + ascent),
+                                run,
+                                font=run_font,
+                                fill=fill,
+                                anchor="ls",
+                            )
+                            x += run_font.getlength(run)
+                y += font.line_height
+            return font.line_height * len(lines)
         await Apilmoji.text(
             ctx.image,
             xy,

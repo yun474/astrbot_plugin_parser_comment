@@ -135,6 +135,32 @@ def test_fetch_failure_becomes_optional_content_failure(module, tmp_path):
     asyncio.run(run())
 
 
+def test_repeat_requests_reuse_image_without_browser(module, tmp_path):
+    async def run():
+        svc = service(module, tmp_path)
+        svc._fetch_comments = AsyncMock(
+            side_effect=lambda *a, **k: ([svc._parse_comment(comment())], 1)
+        )
+
+        async def render(template, context, path):
+            path.write_bytes(b"image" * 30)
+            return path
+
+        renderer = AsyncMock(side_effect=render)
+        svc.parser.html_renderer = SimpleNamespace(render=renderer)
+        first, second = await asyncio.gather(
+            svc._build_image("123", "作品", "作者"),
+            svc._build_image("123", "作品", "作者"),
+        )
+        assert first == second
+        assert await svc._build_image("123", "作品", "作者") == first
+        svc._fetch_comments.assert_awaited_once()
+        renderer.assert_awaited_once()
+        await svc.image_cache.close()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("fail_next", [False, True])
 @pytest.mark.parametrize("initial_cursor", [0, 20])
 def test_browser_pagination_deduplicates_and_closes(
