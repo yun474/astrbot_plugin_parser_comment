@@ -20,7 +20,11 @@
     "enable": true,
     "use_proxy": false,
     "cookies": "",
-    "video_quality": "1080p"
+    "video_quality": "1080p",
+    "comment_render_enable": true,
+    "comment_show_replies": true,
+    "comment_limit": 9,
+    "comment_merge_with_video": false
   },
   {
     "__template_key": "kuaishou",

@@ -345,6 +345,35 @@
                             "540P 标清"
                         ],
                         "default": "1080p"
+                    },
+                    "comment_render_enable": {
+                        "description": "渲染评论区图片",
+                        "hint": "读取抖音网页评论并生成图片，需要本地 Chromium；无法读取时跳过评论，不影响作品解析",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "comment_show_replies": {
+                        "description": "评论区显示楼中楼",
+                        "hint": "展示评论接口附带的部分回复；接口未提供的回复仅显示总数",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "comment_limit": {
+                        "description": "评论展示数量",
+                        "hint": "最多展示的热门评论数（0–20）；受抖音接口可见范围限制",
+                        "type": "int",
+                        "slider": {
+                            "min": 0,
+                            "max": 20,
+                            "step": 1
+                        },
+                        "default": 9
+                    },
+                    "comment_merge_with_video": {
+                        "description": "评论图与主视频同一合并转发",
+                        "hint": "将作品和评论图片放入同一组合并转发；关闭时评论单独发送",
+                        "type": "bool",
+                        "default": false
                     }
                 }
             },

@@ -48,6 +48,9 @@ class DouyinParser(BaseParser):
         self.mycfg = config.parser.douyin
         self.cookiejar = CookieJar(config, self.mycfg, domain="douyin.com")
         self._set_cookies()
+        from .comments import DouyinCommentService
+
+        self.comment_service = DouyinCommentService(self)
 
     def _set_cookies(self, cookies_str: str = ""):
         """设置cookie到请求头"""
@@ -293,6 +296,13 @@ class DouyinParser(BaseParser):
             title=video_data.desc,
             author=author,
             contents=contents,
+            send_groups=self.comment_service.build_send_groups(
+                contents,
+                vid,
+                video_data.desc,
+                video_data.author.nickname,
+                kind="note" if video_data.image_url_lists else ty,
+            ),
             timestamp=video_data.create_time,
         )
 
@@ -469,5 +479,8 @@ class DouyinParser(BaseParser):
             title=slides_data.desc,
             author=author,
             contents=contents,
+            send_groups=self.comment_service.build_send_groups(
+                contents, video_id, slides_data.desc, slides_data.name, kind="note"
+            ),
             timestamp=slides_data.create_time,
         )

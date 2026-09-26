@@ -1,0 +1,50 @@
+{% extends "bili_base.html" %}
+{% block style %}
+.head { padding: 24px; border-bottom: 1px solid var(--line); }
+.platform { color: #fe2c55; font-size: 15px; font-weight: 700; }
+.title { font-size: 19px; line-height: 1.5; margin: 10px 0; word-break: break-word; }
+.muted { color: var(--text3); font-size: 13px; }
+.heading { font-size: 22px; font-weight: 700; margin-top: 20px; }
+.heading span { margin-left: 10px; font-size: 14px; color: var(--text3); font-weight: 400; }
+.list { padding: 0 24px; }
+.comment { display: flex; gap: 12px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+.comment:last-child { border: 0; }
+.face { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex: none; background: #f2f2f4; }
+.fallback { display: flex; align-items: center; justify-content: center; color: #999; font-size: 18px; }
+.content { flex: 1; min-width: 0; }
+.name { font-size: 14px; color: var(--text2); }
+.badge { color: #fe2c55; background: #fff0f3; padding: 2px 5px; border-radius: 3px; font-size: 11px; margin-left: 5px; }
+.message { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.6; margin: 6px 0; }
+.meta { display: flex; gap: 12px; align-items: center; color: var(--text3); font-size: 12px; margin-top: 8px; }
+.likes { margin-left: auto; }
+.pictures { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.pictures img { max-width: 240px; max-height: 260px; border-radius: 8px; object-fit: contain; }
+.sub { display: flex; gap: 8px; margin-top: 14px; }
+.sub .face { width: 28px; height: 28px; font-size: 13px; }
+.sub .message { font-size: 14px; }
+.more { margin-top: 10px; font-size: 12px; color: var(--text3); }
+.foot { padding: 14px 24px; background: var(--bg2); color: var(--text3); font-size: 12px; }
+{% endblock %}
+{% macro face(c) %}
+{% if c.avatar %}<img class="face" src="{{ c.avatar }}">{% else %}<div class="face fallback">{{ c.name[:1] }}</div>{% endif %}
+{% endmacro %}
+{% macro body(c) %}
+<div class="name">{{ c.name }}{% if c.author %}<span class="badge">作者</span>{% endif %}{% if c.pinned %}<span class="badge">置顶</span>{% endif %}</div>
+<div class="message">{{ c.message }}</div>
+{% if c.pictures %}<div class="pictures">{% for pic in c.pictures %}<img src="{{ pic }}">{% endfor %}</div>{% endif %}
+<div class="meta"><span>{{ c.date }}</span>{% if c.location %}<span>{{ c.location }}</span>{% endif %}{% if c.liked %}<span class="badge">作者赞过</span>{% endif %}<span class="likes">♡ {{ c.likes }}</span></div>
+{% endmacro %}
+{% block body %}
+<div class="card">
+  <div class="head"><div class="platform">抖音 · 评论区</div><div class="title">{{ title }}</div><div class="muted">{{ author }}</div><div class="heading">评论<span>{{ total }} 条 · 热门评论</span></div></div>
+  <div class="list">
+  {% for c in comments %}
+    <div class="comment">{{ face(c) }}<div class="content">{{ body(c) }}
+      {% for reply in c.replies %}<div class="sub">{{ face(reply) }}<div class="content">{{ body(reply) }}</div></div>{% endfor %}
+      {% if show_replies and c.reply_count > c.replies|length %}<div class="more">共 {{ c.reply_count }} 条回复 · 更多回复请在抖音查看</div>{% endif %}
+    </div></div>
+  {% endfor %}
+  </div>
+  <div class="foot">展示 {{ comments|length }} 条热门评论{% if show_replies %} · 楼中楼仅展示接口返回的部分回复{% endif %}</div>
+</div>
+{% endblock %}
