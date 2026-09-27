@@ -36,18 +36,11 @@ async def load_gallery_images(parser, vid: str, images):
                 await context.add_cookies(cookies)
             page = await context.new_page()
 
-            # 详情请求只需要页面脚本；图片、字体和自动播放不应拖住导航。
-            async def route_request(route):
-                if route.request.resource_type in {"image", "media", "font"}:
-                    await route.abort()
-                else:
-                    await route.continue_()
-
-            await page.route("**/*", route_request)
+            # 允许页面正常加载图片和实况资源，为慢网络留足等待时间。
             await page.goto(
                 f"https://www.douyin.com/note/{vid}",
-                wait_until="domcontentloaded",
-                timeout=25000,
+                wait_until="load",
+                timeout=60000,
             )
             payload = await page.evaluate(
                 """async (vid) => {
@@ -57,7 +50,7 @@ async def load_gallery_images(parser, vid: str, images):
                     });
                     const response = await fetch(
                         '/aweme/v1/web/aweme/detail/?' + query.toString(),
-                        {credentials: 'include', signal: AbortSignal.timeout(10000)}
+                        {credentials: 'include', signal: AbortSignal.timeout(30000)}
                     );
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     return await response.json();
@@ -70,6 +63,12 @@ async def load_gallery_images(parser, vid: str, images):
             full_images = msgspec.convert(detail.get("images"), type=list[Image])
             if len(full_images) != len(images):
                 raise ValueError("作品详情与分享页的图片数量不一致")
+            # 网页详情补齐实况，但图片经常只有一个 PC CDN 的两种格式。
+            # 保留分享页给出的完整签名镜像，避免覆盖后在同一故障节点反复重试。
+            for original, full in zip(images, full_images):
+                full.url_list = list(
+                    dict.fromkeys([*original.url_list, *full.url_list])
+                )
             return full_images
         finally:
             await context.close()

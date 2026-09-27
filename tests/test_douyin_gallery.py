@@ -177,10 +177,15 @@ def test_web_gallery_enrichment_and_context_cleanup(modules, failure):
         gallery = importlib.import_module("core.parsers.douyin.gallery")
         payload = gallery_payload()
         originals = msgspec.convert(
-            [{"url_list": i["url_list"]} for i in payload["images"]],
+            [
+                {"url_list": [f"https://mobile-{n}/image.webp", *i["url_list"]]}
+                for n, i in enumerate(payload["images"])
+            ],
             type=list[modules.video.Image],
         )
         detail = {"aweme_id": "123", **payload}
+        for n, item in enumerate(detail["images"]):
+            item["url_list"] = [*item["url_list"], f"https://pc-{n}/image.webp"]
         if failure == "wrong_id":
             detail["aweme_id"] = "456"
         if failure == "missing_image":
@@ -207,26 +212,20 @@ def test_web_gallery_enrichment_and_context_cleanup(modules, failure):
         if failure:
             assert result is originals
         else:
+            for n, (original, enriched) in enumerate(zip(originals, result)):
+                assert enriched.url_list == [
+                    *original.url_list,
+                    f"https://pc-{n}/image.webp",
+                ]
             assert result[1].video.play_addr.url_list == [
                 "https://cdn/live.mp4",
                 "https://backup/live.mp4",
             ]
         context.close.assert_awaited_once()
-        assert page.goto.call_args.kwargs["wait_until"] == "domcontentloaded"
-        route_handler = page.route.call_args.args[1]
-        for resource in ("image", "media", "font", "script", "xhr", "document"):
-            route = SimpleNamespace(
-                request=SimpleNamespace(resource_type=resource),
-                abort=AsyncMock(),
-                continue_=AsyncMock(),
-            )
-            await route_handler(route)
-            assert route.abort.await_count == int(
-                resource in {"image", "media", "font"}
-            )
-            assert route.continue_.await_count == int(
-                resource not in {"image", "media", "font"}
-            )
+        assert page.goto.call_args.kwargs["wait_until"] == "load"
+        assert page.goto.call_args.kwargs["timeout"] == 60000
+        page.route.assert_not_called()
+        assert "AbortSignal.timeout(30000)" in page.evaluate.call_args.args[0]
         page.evaluate.assert_awaited_once()
 
     asyncio.run(run())
