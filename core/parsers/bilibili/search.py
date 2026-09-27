@@ -24,15 +24,16 @@ class BiliSearch:
         self.web = web
 
     async def find_video(self, title: str) -> str | None:
-        """返回同名视频的 bvid; 没有同名视频返回 None, 接口一直被风控则抛异常
+        """返回完整同名的唯一 bvid；无匹配返回 None，多个同名结果则抛异常。
 
         两个接口的索引和排序不完全一样 (普通版有时缺最新的视频), 所以一个没找到
-        还要问另一个; 被风控的接口隔一会儿再问, 最多 ATTEMPTS 轮。
+        还要问另一个以检查歧义; 被风控的接口隔一会儿再问, 最多 ATTEMPTS 轮。
         """
         headers, _ = await self.web.headers()
         params = {"search_type": "video", "keyword": title, "page": 1, "page_size": 42}
         pending = list(self.ENDPOINTS)
         answered = False
+        candidates: list[dict] = []
 
         async with self.web.session() as session:
             await self.web.warm_up(session, headers, self.WARM_UP_URL)
@@ -46,17 +47,13 @@ class BiliSearch:
                         blocked.append((url, wbi))
                         continue
                     answered = True
-                    if bvid := pick_video_by_title(title, results):
-                        return bvid
-                    logger.info(
-                        f"[Bilibili-search] {len(results)} 条结果里没有同名视频: {title}"
-                    )
+                    candidates.extend(results)
                 if not blocked:
                     break
                 pending = blocked
 
         if answered:
-            return None
+            return pick_video_by_title(title, candidates)
         raise RuntimeError("搜索接口被风控, 请稍后再试或配置 B站 Cookie")
 
     async def _search(

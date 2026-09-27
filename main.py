@@ -139,12 +139,21 @@ class ParserPlugin(Star):
         except Exception as e:
             logger.warning(f"[LLMTool] 同步工具状态失败: {e}")
 
-    def _match_link(self, text: str) -> tuple[str, re.Match[str]] | None:
+    def _match_link(
+        self, text: str, *, is_card: bool = False
+    ) -> tuple[str, re.Match[str]] | None:
         """按与消息监听相同的规则查找解析器。"""
         for keyword, pattern in self.key_pattern_list:
             if keyword not in text:
                 continue
             if searched := pattern.search(text):
+                parser = self.parser_map[keyword]
+                if (
+                    isinstance(parser, BilibiliParser)
+                    and (is_card or keyword == "[卡片消息]")
+                    and not parser.mycfg.miniapp_parse_enable
+                ):
+                    return None
                 return keyword, searched
         return None
 
@@ -267,7 +276,7 @@ class ParserPlugin(Star):
             return
 
         # 核心匹配逻辑 ：关键词 + 正则双重判定，汇集了所有解析器的正则对。
-        matched = self._match_link(text)
+        matched = self._match_link(text, is_card=card_text is not None)
         if matched is None:
             return
         keyword, searched = matched

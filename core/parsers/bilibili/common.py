@@ -29,20 +29,18 @@ def normalize_title(title: str) -> str:
 
 
 def pick_video_by_title(title: str, results: list[dict]) -> str | None:
-    """从搜索结果里挑同名视频的 bvid: 优先完全一致, 其次前缀一致 (卡片标题可能被截断)"""
+    """只接受唯一的完整同名结果；不同 BV 同名时拒绝猜测。"""
     wanted = normalize_title(title)
-    candidates = [
-        (normalize_title(item.get("title", "")), str(item["bvid"]))
+    if not wanted:
+        return None
+    candidates = {
+        str(item["bvid"])
         for item in results
-        if item.get("bvid")
-    ]
-    for found, bvid in candidates:
-        if found == wanted:
-            return bvid
-    for found, bvid in candidates:
-        if found.startswith(wanted) or wanted.startswith(found):
-            return bvid
-    return None
+        if item.get("bvid") and normalize_title(item.get("title", "")) == wanted
+    }
+    if len(candidates) > 1:
+        raise ValueError("找到多个同名视频，无法确定原视频，请发送 B站链接或 BV 号")
+    return next(iter(candidates), None)
 
 
 def fmt_count(value: int) -> str:

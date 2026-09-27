@@ -188,6 +188,12 @@
             "bilibili": {
                 "name": "B站解析器",
                 "items": {
+                    "miniapp_parse_enable": {
+                        "description": "B站卡片/小程序解析",
+                        "hint": "默认关闭，不影响普通链接和 BV 号。开启后，有链接的卡片直接解析；仅有标题的官 Bot 卡片通过搜索匹配，多个同名结果或标题截断时不解析。搜索结果不完整，单个同名结果仍可能误匹配。",
+                        "type": "bool",
+                        "default": false
+                    },
                     "enable": {
                         "description": "启用",
                         "type": "bool",

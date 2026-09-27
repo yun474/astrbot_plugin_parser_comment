@@ -184,6 +184,7 @@ class ParserItem(ConfigNode):
     enable: bool
     use_proxy: bool
     cookies: str | None
+    miniapp_parse_enable: bool | None
     show_body_text: bool | None
     video_send_mode: str | None
     video_codec_list: list | None

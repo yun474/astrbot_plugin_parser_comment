@@ -471,7 +471,7 @@ class BilibiliParser(BaseParser):
         except Exception as e:
             raise ParseException(f"B站搜索失败: {e}") from e
         if not bvid:
-            raise ParseException(f"B站没有搜到同名视频: {title}")
+            raise ParseException("B站没有搜到完整同名视频，请发送 B站链接或 BV 号")
         return bvid
 
     async def _get_video(

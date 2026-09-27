@@ -1,6 +1,7 @@
 [
   {
     "__template_key": "bilibili",
+    "miniapp_parse_enable": false,
     "enable": true,
     "use_proxy": false,
     "cookies": "",

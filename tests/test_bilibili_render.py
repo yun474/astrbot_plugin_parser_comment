@@ -336,9 +336,38 @@ def test_official_card_pattern_and_title_match(bili):
     ]
     pick = bili.common.pick_video_by_title
     assert pick(match.group("title"), results) == "BV1exact"
-    # 卡片标题被截断时按前缀匹配
-    assert pick("良心核弹！智谱免费替全国程序员", results) == "BV1exact"
+    # 截断标题不能作为视频身份依据
+    assert pick("良心核弹！智谱免费替全国程序员", results) is None
     assert pick("完全无关的标题", results) is None
+    assert pick("", results) is None
+
+
+def test_title_match_rejects_duplicates_but_deduplicates_bvid(bili):
+    pick = bili.common.pick_video_by_title
+    hit = {"bvid": "BV1first", "title": "同名视频"}
+    assert pick("同名视频", [hit, hit]) == "BV1first"
+    with pytest.raises(ValueError, match="多个同名视频"):
+        pick("同名视频", [hit, {"bvid": "BV1second", "title": "同名视频"}])
+
+
+def test_search_checks_both_endpoints_for_ambiguity(bili):
+    plain, wbi = (url for url, _ in bili.search.BiliSearch.ENDPOINTS)
+    web, calls = make_web(
+        {
+            plain: [
+                {"code": 0, "data": {"result": [{"bvid": "BV1first", "title": "同名"}]}}
+            ],
+            wbi: [
+                {
+                    "code": 0,
+                    "data": {"result": [{"bvid": "BV1second", "title": "同名"}]},
+                }
+            ],
+        }
+    )
+    with pytest.raises(ValueError, match="多个同名视频"):
+        asyncio.run(bili.search.BiliSearch(web).find_video("同名"))
+    assert len(calls) == 3
 
 
 class FakeSession:
