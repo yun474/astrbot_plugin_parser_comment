@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from astrbot.api import logger
 
 from ...comment_utils import CommentImageCache, download_comment_assets
-from ...data import ImageContent, SendGroup
+from ...data import DynamicContent, ImageContent, SendGroup
 from ...exception import DownloadLimitException
 from ...html_render import image_data_uri
 
@@ -49,8 +49,13 @@ class DouyinCommentService:
     def build_send_groups(
         self, contents, vid: str, title: str, author: str, *, kind: str = "video"
     ):
+        preserve_order = any(isinstance(c, DynamicContent) for c in contents)
         if not self.enabled or not self.limit:
-            return []
+            return (
+                [SendGroup(contents=contents, preserve_order=True)]
+                if preserve_order
+                else []
+            )
         task = asyncio.create_task(
             self._build_image(vid, title, author, kind=kind),
             name=f"douyin_comments_{vid}",
@@ -66,7 +71,7 @@ class DouyinCommentService:
                 )
             ]
         return [
-            SendGroup(contents=contents),
+            SendGroup(contents=contents, preserve_order=preserve_order),
             SendGroup(contents=comments, force_merge=True, render_card=False),
         ]
 

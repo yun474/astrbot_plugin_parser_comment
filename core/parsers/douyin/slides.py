@@ -1,5 +1,7 @@
 from msgspec import Struct, field
 
+from .music import Music, MusicClip
+
 
 class PlayAddr(Struct):
     url_list: list[str]
@@ -35,6 +37,8 @@ class SlidesData(Struct):
     desc: str
     create_time: int
     images: list[Image]
+    music: Music | None = None
+    image_album_music_info: MusicClip | None = None
 
     @property
     def name(self) -> str:

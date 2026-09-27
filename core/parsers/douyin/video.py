@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 from msgspec import Struct, field
 
 from ..base import ParseException
+from .music import Music, MusicClip
 
 
 class Avatar(Struct):
@@ -43,6 +44,8 @@ class VideoData(Struct):
     desc: str
     images: list[Image] | None = None
     video: Video | None = None
+    music: Music | None = None
+    image_album_music_info: MusicClip | None = None
 
     @property
     def image_url_lists(self) -> list[list[str]]:

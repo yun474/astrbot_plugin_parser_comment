@@ -188,6 +188,8 @@ class ParserItem(ConfigNode):
     video_send_mode: str | None
     video_codec_list: list | None
     video_quality: str | None
+    live_photo_enable: bool | None
+    gallery_merge_video: bool | None
     comment_render_enable: bool | None
     comment_limit: int | None
     comment_filter_text: bool | None

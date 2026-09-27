@@ -1,5 +1,6 @@
 import asyncio
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import urlparse
@@ -20,7 +21,9 @@ from ..base import (
 )
 
 if TYPE_CHECKING:
-    from ...data import ParseResult
+    from ...data import DynamicContent, ImageContent, ParseResult
+    from .slides import Image as SlidesImage
+    from .video import Image
     from .video import VideoData
 
 
@@ -264,6 +267,83 @@ class DouyinParser(BaseParser):
             await asyncio.sleep(1)
         raise last_error
 
+    def _create_gallery_contents(
+        self,
+        images: "Sequence[Image | SlidesImage]",
+        headers: dict[str, str],
+    ) -> "list[ImageContent | DynamicContent]":
+        """按图集顺序选取动态视频或静态图片，避免重复发送动态封面。"""
+        contents = []
+        for image in images:
+            if (
+                self.mycfg.live_photo_enable is not False
+                and image.video
+                and image.video.play_addr.url_list
+            ):
+                contents.extend(
+                    self.create_dynamic_contents(
+                        [image.video.play_addr.url_list],
+                        headers={**headers, "Referer": "https://www.douyin.com/"},
+                    )
+                )
+            else:
+                contents.extend(
+                    self.create_image_contents([image.url_list], headers=headers)
+                )
+        return contents
+
+    async def _prepare_gallery(self, vid, images, headers, music=None, music_info=None):
+        from .gallery import load_gallery_images
+
+        if self.mycfg.live_photo_enable is not False:
+            images = await load_gallery_images(self, vid, images)
+        contents = self._create_gallery_contents(images, headers)
+        if self.mycfg.gallery_merge_video and contents:
+            from ...exception import DownloadException
+            from .gallery_video import merge_gallery_video
+
+            duration = sum(
+                image.video.duration / 1000
+                if self.mycfg.live_photo_enable is not False
+                and image.video
+                and image.video.play_addr.url_list
+                else 2.0
+                for image in images
+                if image.url_list or (image.video and image.video.play_addr.url_list)
+            )
+            music_path = None
+            if music and music.play_url and music.play_url.url_list:
+                try:
+                    music_path = await self.downloader.download_audio(
+                        music.play_url.url_list[0],
+                        headers={**headers, "Referer": "https://www.douyin.com/"},
+                        proxy=self.proxy,
+                    )
+                except DownloadException as e:
+                    logger.warning(f"[抖音] 原配乐下载失败，合成静音视频: {e}")
+            contents = [
+                await merge_gallery_video(
+                    self.cfg,
+                    contents,
+                    duration,
+                    music_path=music_path,
+                    music_info=music_info,
+                )
+            ]
+        return contents
+
+    def _gallery_send_groups(self, contents, vid, title, author, *, kind):
+        from ...data import SendGroup
+
+        groups = self.comment_service.build_send_groups(
+            contents, vid, title, author, kind=kind
+        )
+        if self.mycfg.gallery_merge_video and kind == "note":
+            if not groups:
+                groups = [SendGroup(contents=contents)]
+            groups[0].render_card = False
+        return groups
+
     async def parse_video(self, ty: str, vid: str):
         await self.ensure_ttwid()
         url, video_data = await self._load_share_data(ty, vid)
@@ -273,10 +353,14 @@ class DouyinParser(BaseParser):
         contents = []
 
         # 添加图片内容
-        if image_url_lists := video_data.image_url_lists:
-            logger.debug(f"[抖音] 检测到图文内容，图片数量: {len(image_url_lists)}")
-            contents.extend(
-                self.create_image_contents(image_url_lists, headers=self.ios_headers)
+        if images := video_data.images:
+            logger.debug(f"[抖音] 检测到图文内容，图片数量: {len(images)}")
+            contents = await self._prepare_gallery(
+                vid,
+                images,
+                self.ios_headers,
+                video_data.music,
+                video_data.image_album_music_info,
             )
 
         # 添加视频内容
@@ -296,12 +380,12 @@ class DouyinParser(BaseParser):
             title=video_data.desc,
             author=author,
             contents=contents,
-            send_groups=self.comment_service.build_send_groups(
+            send_groups=self._gallery_send_groups(
                 contents,
                 vid,
                 video_data.desc,
                 video_data.author.nickname,
-                kind="note" if video_data.image_url_lists else ty,
+                kind="note" if video_data.images else ty,
             ),
             timestamp=video_data.create_time,
         )
@@ -450,25 +534,13 @@ class DouyinParser(BaseParser):
         logger.debug(
             f"[抖音] 幻灯片解析成功 - 作者: {slides_data.name}, 描述: {slides_data.desc[:50]}..."
         )
-        contents = []
-
-        # 添加图片内容
-        if image_url_lists := slides_data.image_url_lists:
-            logger.debug(f"[抖音] 检测到幻灯片图片，数量: {len(image_url_lists)}")
-            contents.extend(
-                self.create_image_contents(
-                    image_url_lists, headers=self.android_headers
-                )
-            )
-
-        # 添加动态内容
-        if dynamic_url_lists := slides_data.dynamic_url_lists:
-            logger.debug(f"[抖音] 检测到幻灯片动态效果，数量: {len(dynamic_url_lists)}")
-            contents.extend(
-                self.create_dynamic_contents(
-                    dynamic_url_lists, headers=self.android_headers
-                )
-            )
+        contents = await self._prepare_gallery(
+            video_id,
+            slides_data.images,
+            self.android_headers,
+            slides_data.music,
+            slides_data.image_album_music_info,
+        )
 
         # 构建作者
         author = self.create_author(
@@ -479,7 +551,7 @@ class DouyinParser(BaseParser):
             title=slides_data.desc,
             author=author,
             contents=contents,
-            send_groups=self.comment_service.build_send_groups(
+            send_groups=self._gallery_send_groups(
                 contents, video_id, slides_data.desc, slides_data.name, kind="note"
             ),
             timestamp=slides_data.create_time,

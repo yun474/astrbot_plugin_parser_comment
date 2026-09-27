@@ -314,6 +314,18 @@
             "douyin": {
                 "name": "抖音解析器",
                 "items": {
+                    "live_photo_enable": {
+                        "description": "解析实况动图",
+                        "hint": "开启时获取实况视频；关闭后仅取静态图片，不启动浏览器补取实况",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "gallery_merge_video": {
+                        "description": "图集合并为一条视频",
+                        "hint": "按原顺序把静态图片和实况合成一个 MP4，附带原作品 BGM（可获取时），静态图停留 2 秒，需要 FFmpeg。适合官 Bot 避免刷屏；关闭实况解析时合成为静态相册视频。评论仍由评论开关控制",
+                        "type": "bool",
+                        "default": false
+                    },
                     "enable": {
                         "description": "启用",
                         "type": "bool",

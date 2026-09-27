@@ -250,11 +250,12 @@ def test_parser_attaches_comment_group(module, tmp_path, kind):
         from core.parsers.douyin import DouyinParser
 
         parser = DouyinParser.__new__(DouyinParser)
+        parser.mycfg = SimpleNamespace(gallery_merge_video=False)
         parser.ensure_ttwid = AsyncMock()
         data = SimpleNamespace(
             author=SimpleNamespace(nickname="作者"),
             desc="作品",
-            image_url_lists=[],
+            images=[],
             video=None,
             avatar_url=None,
             create_time=1,
