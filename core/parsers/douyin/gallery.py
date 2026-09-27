@@ -35,9 +35,18 @@ async def load_gallery_images(parser, vid: str, images):
             if cookies:
                 await context.add_cookies(cookies)
             page = await context.new_page()
+
+            # 详情请求只需要页面脚本；图片、字体和自动播放不应拖住导航。
+            async def route_request(route):
+                if route.request.resource_type in {"image", "media", "font"}:
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", route_request)
             await page.goto(
                 f"https://www.douyin.com/note/{vid}",
-                wait_until="load",
+                wait_until="domcontentloaded",
                 timeout=25000,
             )
             payload = await page.evaluate(

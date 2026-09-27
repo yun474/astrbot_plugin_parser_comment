@@ -119,6 +119,7 @@ def test_gallery_downloads_dynamic_media_instead_of_cover(modules, entry):
             "https://cdn/last.jpg",
         ]
         assert images[1].kwargs["backup_urls"] == ["https://backup/last.jpg"]
+        assert images[0].kwargs["headers"]["Referer"] == "https://www.douyin.com/"
         parser.downloader.download_video.assert_called_once_with(
             "https://cdn/live.mp4",
             headers={
@@ -185,6 +186,7 @@ def test_web_gallery_enrichment_and_context_cleanup(modules, failure):
         if failure == "missing_image":
             detail["images"] = detail["images"][:1]
         page = SimpleNamespace(
+            route=AsyncMock(),
             goto=AsyncMock(),
             evaluate=AsyncMock(return_value={"status_code": 0, "aweme_detail": detail}),
         )
@@ -210,6 +212,21 @@ def test_web_gallery_enrichment_and_context_cleanup(modules, failure):
                 "https://backup/live.mp4",
             ]
         context.close.assert_awaited_once()
+        assert page.goto.call_args.kwargs["wait_until"] == "domcontentloaded"
+        route_handler = page.route.call_args.args[1]
+        for resource in ("image", "media", "font", "script", "xhr", "document"):
+            route = SimpleNamespace(
+                request=SimpleNamespace(resource_type=resource),
+                abort=AsyncMock(),
+                continue_=AsyncMock(),
+            )
+            await route_handler(route)
+            assert route.abort.await_count == int(
+                resource in {"image", "media", "font"}
+            )
+            assert route.continue_.await_count == int(
+                resource not in {"image", "media", "font"}
+            )
         page.evaluate.assert_awaited_once()
 
     asyncio.run(run())

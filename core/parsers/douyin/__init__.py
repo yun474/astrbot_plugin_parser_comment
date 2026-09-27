@@ -273,6 +273,7 @@ class DouyinParser(BaseParser):
         headers: dict[str, str],
     ) -> "list[ImageContent | DynamicContent]":
         """按图集顺序选取动态视频或静态图片，避免重复发送动态封面。"""
+        headers = {**headers, "Referer": "https://www.douyin.com/"}
         contents = []
         for image in images:
             if (
@@ -283,7 +284,7 @@ class DouyinParser(BaseParser):
                 contents.extend(
                     self.create_dynamic_contents(
                         [image.video.play_addr.url_list],
-                        headers={**headers, "Referer": "https://www.douyin.com/"},
+                        headers=headers,
                     )
                 )
             else:
