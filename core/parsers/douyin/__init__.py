@@ -294,12 +294,16 @@ class DouyinParser(BaseParser):
         return contents
 
     async def _prepare_gallery(self, vid, images, headers, music=None, music_info=None):
+        from ...data import DynamicContent
         from .gallery import load_gallery_images
 
         if self.mycfg.live_photo_enable is not False:
             images = await load_gallery_images(self, vid, images)
         contents = self._create_gallery_contents(images, headers)
-        if self.mycfg.gallery_merge_video and contents:
+        has_dynamic = any(isinstance(c, DynamicContent) for c in contents)
+        if self.mycfg.gallery_merge_video and (
+            len(contents) >= 2 or has_dynamic
+        ):
             from ...exception import DownloadException
             from .gallery_video import merge_gallery_video
 
@@ -321,7 +325,9 @@ class DouyinParser(BaseParser):
                         proxy=self.proxy,
                     )
                 except DownloadException as e:
-                    logger.warning(f"[抖音] 原配乐下载失败，合成静音视频: {e}")
+                    logger.warning(f"[抖音] 原配乐下载失败: {e}")
+            if len(contents) == 2 and not has_dynamic and music_path is None:
+                return contents
             contents = [
                 await merge_gallery_video(
                     self.cfg,

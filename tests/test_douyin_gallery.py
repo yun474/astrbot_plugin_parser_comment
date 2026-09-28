@@ -288,6 +288,80 @@ def test_gallery_switch_combinations(modules, monkeypatch, live, merge):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    "static_count,dynamic_count",
+    [
+        (0, 0),
+        (1, 0),
+        (2, 0),
+        (3, 0),
+        (4, 0),
+        (0, 1),
+        (0, 2),
+        (1, 1),
+    ],
+)
+@pytest.mark.parametrize("bgm", ["available", "missing", "failed"])
+def test_gallery_merge_threshold(
+    modules, monkeypatch, static_count, dynamic_count, bgm
+):
+    async def run():
+        gallery = importlib.import_module("core.parsers.douyin.gallery")
+        video = importlib.import_module("core.parsers.douyin.gallery_video")
+        music_module = importlib.import_module("core.parsers.douyin.music")
+        source = gallery_payload()["images"]
+        images = msgspec.convert(
+            [source[0]] * static_count + [source[1]] * dynamic_count,
+            type=list[modules.video.Image],
+        )
+        monkeypatch.setattr(
+            gallery, "load_gallery_images", AsyncMock(return_value=images)
+        )
+        merged = modules.data.VideoContent(Path("merged.mp4"))
+        combine = AsyncMock(return_value=merged)
+        monkeypatch.setattr(video, "merge_gallery_video", combine)
+        parser = modules.parser.DouyinParser.__new__(modules.parser.DouyinParser)
+        parser.cfg = SimpleNamespace()
+        parser.mycfg = SimpleNamespace(live_photo_enable=True, gallery_merge_video=True)
+        parser.headers = {}
+        parser.downloader = SimpleNamespace(
+            download_img=Mock(return_value=Path("image.jpg")),
+            download_video=Mock(return_value=Path("live.mp4")),
+            download_audio=AsyncMock(return_value=Path("bgm.mp3")),
+        )
+        music = msgspec.convert(
+            {"play_url": {"url_list": ["https://cdn/bgm.mp3"]}}, type=music_module.Music
+        )
+        if bgm == "missing":
+            music = None
+        elif bgm == "failed":
+            exception = importlib.import_module("core.exception")
+            parser.downloader.download_audio.side_effect = exception.DownloadException()
+        should_merge = (
+            dynamic_count > 0
+            or static_count >= 3
+            or (static_count == 2 and bgm == "available")
+        )
+        contents = await parser._prepare_gallery("123", images, {}, music)
+        if should_merge:
+            assert contents == [merged]
+            combine.assert_awaited_once()
+            assert combine.call_args.args[2] == static_count * 2 + dynamic_count * 3
+            assert combine.call_args.kwargs["music_path"] == (
+                Path("bgm.mp3") if bgm == "available" else None
+            )
+        else:
+            assert len(contents) == static_count
+            assert all(isinstance(c, modules.data.ImageContent) for c in contents)
+            combine.assert_not_awaited()
+        if bgm != "missing" and (static_count >= 2 or dynamic_count > 0):
+            parser.downloader.download_audio.assert_awaited_once()
+        else:
+            parser.downloader.download_audio.assert_not_awaited()
+
+    asyncio.run(run())
+
+
 def test_merge_failure_does_not_return_individual_media(modules, monkeypatch):
     async def run():
         video = importlib.import_module("core.parsers.douyin.gallery_video")
@@ -309,6 +383,7 @@ def test_merge_failure_does_not_return_individual_media(modules, monkeypatch):
         images = msgspec.convert(
             gallery_payload()["images"], type=list[modules.video.Image]
         )
+        images.append(images[0])
         with pytest.raises(exception.ParseException, match="合成失败"):
             await parser._prepare_gallery("123", images, {})
 
@@ -342,6 +417,7 @@ def test_gallery_bgm_download_and_optional_fallback(modules, monkeypatch, failur
             {"play_url": {"url_list": ["https://cdn/bgm.mp3"]}}, type=music_module.Music
         )
         info = music_module.MusicClip(begin_time=1000, end_time=3000, volume=50)
+        images.append(images[0])
         result = await parser._prepare_gallery("123", images, {}, music, info)
         assert len(result) == 1
         assert combine.call_args.kwargs["music_info"] == info
