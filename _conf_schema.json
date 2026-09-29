@@ -473,9 +473,21 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填, 小红书部分链接解析有水印, 填充Cookies可去除水印",
+                        "hint": "选填，不填也能解析；分享页请求被风控时可以填上试试",
                         "type": "text",
                         "default": ""
+                    },
+                    "comment_render_enable": {
+                        "description": "渲染评论区图片",
+                        "hint": "图文笔记的热评拼在文案卡片下面，视频笔记的热评单独发一张图。只能拿到分享页公开的热评（通常 5 条），评论区为空时跳过",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "comment_show_replies": {
+                        "description": "评论区显示楼中楼",
+                        "hint": "展示分享页给出的部分回复",
+                        "type": "bool",
+                        "default": true
                     }
                 }
             },

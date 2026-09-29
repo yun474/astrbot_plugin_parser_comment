@@ -1,0 +1,90 @@
+{% extends "bili_base.html" %}
+{% block style %}
+:root { --brand: #FF2442; --topic: #13386C; }
+.card + .card { margin-top: 12px; }
+.author { display: flex; align-items: center; gap: 12px; padding: 18px 24px; }
+.author .avatar, .author .avatar-fallback { width: 44px; height: 44px; font-size: 18px; }
+.author .avatar-fallback { background: var(--brand); }
+.author .name { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cover-wrap { position: relative; background: var(--bg2); }
+.cover { display: block; width: 100%; max-height: 912px; object-fit: cover; object-position: top; }
+.count { position: absolute; top: 14px; right: 14px; padding: 2px 10px; border-radius: 12px; background: rgba(0, 0, 0, .45); color: #fff; font-size: 13px; }
+.body { padding: 18px 24px 20px; }
+.note-title { font-size: 19px; font-weight: 700; line-height: 1.5; margin-bottom: 8px; word-break: break-word; }
+.desc { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.7; }
+.topic { color: var(--topic); }
+.date { margin-top: 12px; color: var(--text3); font-size: 13px; }
+.stats { display: flex; border-top: 1px solid var(--line); }
+.stat { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 12px 0; color: var(--text2); font-size: 14px; }
+.stat .icon { font-size: 17px; }
+.head { padding: 20px 24px 0; }
+.title { font-size: 17px; line-height: 1.5; margin: 8px 0 2px; word-break: break-word; }
+.muted { color: var(--text3); font-size: 13px; }
+.heading { padding: 18px 24px 4px; font-size: 17px; font-weight: 700; }
+.heading span { margin-left: 8px; font-size: 13px; color: var(--text3); font-weight: 400; }
+.list { padding: 0 24px; }
+.comment { display: flex; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.comment:last-child { border: 0; }
+.face { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex: none; background: var(--bg2); }
+.fallback { display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 16px; }
+.content { flex: 1; min-width: 0; }
+.cname { font-size: 14px; color: var(--text2); }
+.badge { color: var(--brand); background: #FFF0F2; padding: 1px 5px; border-radius: 3px; font-size: 11px; margin-left: 5px; }
+.message { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.6; margin: 4px 0; }
+.pictures { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.pictures img { max-width: 220px; max-height: 240px; border-radius: 8px; object-fit: contain; }
+.meta { display: flex; gap: 10px; align-items: center; color: var(--text3); font-size: 12px; margin-top: 6px; }
+.likes { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.sub { display: flex; gap: 8px; margin-top: 12px; }
+.sub .face { width: 26px; height: 26px; font-size: 12px; }
+.sub .message { font-size: 14px; }
+.more { margin-top: 10px; font-size: 12px; color: var(--topic); }
+.foot { padding: 12px 24px; background: var(--bg2); color: var(--text3); font-size: 12px; }
+{% endblock %}
+{% macro face(c) %}
+{% if c.avatar %}<img class="face" src="{{ c.avatar }}">{% else %}<div class="face fallback">{{ c.name[:1] }}</div>{% endif %}
+{% endmacro %}
+{% macro body(c) %}
+<div class="cname">{{ c.name }}{% if c.author %}<span class="badge">作者</span>{% endif %}</div>
+{% if c.message %}<div class="message">{{ c.message }}</div>{% endif %}
+{% if c.pictures %}<div class="pictures">{% for pic in c.pictures %}<img src="{{ pic }}">{% endfor %}</div>{% endif %}
+<div class="meta"><span>{{ c.date }}</span>{% if c.location %}<span>{{ c.location }}</span>{% endif %}<span class="likes"><svg class="icon"><use href="#i-heart"/></svg>{{ c.likes or "赞" }}</span></div>
+{% endmacro %}
+{% block body %}
+{% include "bili_icons.html" %}
+{% if note %}
+<div class="card">
+  <div class="author">
+    {% if note.avatar %}<img class="avatar" src="{{ note.avatar }}">{% else %}<div class="avatar-fallback">{{ note.nickname[:1] }}</div>{% endif %}
+    <div class="name">{{ note.nickname }}</div>
+    <div class="brand">小红书</div>
+  </div>
+  {% if note.cover %}
+  <div class="cover-wrap"><img class="cover" src="{{ note.cover }}">{% if note.image_count > 1 %}<span class="count">1/{{ note.image_count }}</span>{% endif %}</div>
+  {% endif %}
+  <div class="body">
+    {% if note.title %}<div class="note-title">{{ note.title }}</div>{% endif %}
+    {% if note.desc %}<div class="desc">{{ note.desc }}</div>{% endif %}
+    {% if note.date %}<div class="date">{{ note.date }}</div>{% endif %}
+  </div>
+  <div class="stats">
+    {% for icon, label, value in note.stats %}<div class="stat"><svg class="icon"><use href="#i-{{ icon }}"/></svg>{{ value }}</div>{% endfor %}
+  </div>
+</div>
+{% endif %}
+{% if comments %}
+<div class="card">
+  {% if not note %}<div class="head"><div class="brand">小红书 · 评论区</div>{% if title %}<div class="title">{{ title }}</div>{% endif %}<div class="muted">@{{ author }}</div></div>{% endif %}
+  <div class="heading">评论<span>共 {{ total }} 条 · 热门评论</span></div>
+  <div class="list">
+  {% for c in comments %}
+    <div class="comment">{{ face(c) }}<div class="content">{{ body(c) }}
+      {% for reply in c.replies %}<div class="sub">{{ face(reply) }}<div class="content">{{ body(reply) }}</div></div>{% endfor %}
+      {% if c.more %}<div class="more">展开 {{ c.more }} 条回复 · 更多回复请在小红书查看</div>{% endif %}
+    </div></div>
+  {% endfor %}
+  </div>
+  <div class="foot">仅展示分享页公开的 {{ comments|length }} 条热门评论{% if show_replies %} · 楼中楼为部分回复{% endif %}</div>
+</div>
+{% endif %}
+{% endblock %}

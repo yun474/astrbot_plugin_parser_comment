@@ -43,7 +43,9 @@
     "__template_key": "xhs",
     "enable": true,
     "use_proxy": false,
-    "cookies": ""
+    "cookies": "",
+    "comment_render_enable": true,
+    "comment_show_replies": true
   },
   {
     "__template_key": "xiaoheihe",
