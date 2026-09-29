@@ -306,6 +306,39 @@ def test_poster_context(bili, tmp_path):
     assert "热门收录" in rendered and "P2/2" in rendered
 
 
+
+def test_attach_comments_stacks_under_poster(bili, tmp_path):
+    from PIL import Image
+
+    poster_path, comments_path = tmp_path / "poster.jpg", tmp_path / "comments.jpg"
+    Image.new("RGB", (1440, 800), "red").save(poster_path)
+    Image.new("RGB", (720, 300), "blue").save(comments_path)
+    poster = bili.poster.BiliPosterRenderer(FakeHtml(), tmp_path, timezone.utc)
+
+    async def run(comments_ok: bool):
+        async def comments():
+            if not comments_ok:
+                raise RuntimeError("评论区为空")
+            return comments_path
+
+        async def main():
+            return await poster.attach_comments(
+                asyncio.create_task(asyncio.sleep(0, poster_path)),
+                asyncio.create_task(comments()),
+            )
+
+        return await main()
+
+    out = asyncio.run(run(True))
+    with Image.open(out) as img:
+        # 评论图等比放大到海报宽度, 再裁掉 32px (2 倍图的 16px) 上边距
+        assert img.size == (1440, 800 + 600 - 32)
+        assert img.getpixel((10, 10))[0] > 200
+        assert img.getpixel((10, 1300))[2] > 200
+
+    assert asyncio.run(run(False)) == poster_path
+
+
 OFFICIAL_CARD = """[卡片消息] 小程序
 摘要: [QQ小程序]良心核弹！智谱免费替全国程序员备份全量代码仓库！| AI日报0918
 preview: https://qq.ugcimg.cn/v1/abc/def

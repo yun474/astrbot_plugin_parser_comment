@@ -265,6 +265,14 @@ class BilibiliParser(BaseParser):
             video_cover=page_info.cover,
             up_name=video_info.owner.name,
         )
+        # 有海报时评论图直接拼在海报下面, 一次解析只发海报 + 视频两条
+        if poster_task and comment_contents and not self.comment_merge_with_video:
+            comments_task = comment_contents.pop().path_task
+            poster_task = asyncio.create_task(
+                self.poster.attach_comments(poster_task, comments_task),
+                name=f"bili_poster_comments_{video_info.bvid}",
+            )
+            poster_task.add_done_callback(lambda t: t.cancelled() or t.exception())
 
         # 有海报时: 海报先单独发出来, 视频紧随其后, 不塞进合并转发里藏起来;
         # 没海报时沿用原版的默认发送策略。评论图默认作为第二组合并转发。

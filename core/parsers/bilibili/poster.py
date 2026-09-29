@@ -6,6 +6,8 @@ from asyncio import Task
 from datetime import datetime, tzinfo
 from pathlib import Path
 
+from PIL import Image
+
 from ...html_render import HtmlRenderer, image_data_uri
 from .common import fmt_count, fmt_duration, settle_path
 from .video import PageInfo, VideoInfo
@@ -40,6 +42,37 @@ class BiliPosterRenderer:
             self.cache_dir / f"bili_poster_{video.bvid}_{uuid.uuid4().hex[:8]}.jpg"
         )
         return await self.html.render(self.TEMPLATE, context, out_path)
+
+    async def attach_comments(self, poster: Task[Path], comments: Task[Path]) -> Path:
+        """评论图拼到海报下面, 一次解析少发一条消息; 评论区拿不到就只发海报"""
+        poster_path = await poster
+        comments_path = await settle_path(comments)
+        if comments_path is None:
+            return poster_path
+        out_path = poster_path.with_name(f"{poster_path.stem}_comments.jpg")
+        await asyncio.to_thread(
+            self._stack, poster_path, comments_path, out_path, self.WIDTH
+        )
+        return out_path
+
+    @staticmethod
+    def _stack(top_path: Path, bottom_path: Path, out_path: Path, width: int):
+        with Image.open(top_path) as raw:
+            top = raw.convert("RGB")
+        with Image.open(bottom_path) as raw:
+            bottom = raw.convert("RGB")
+        if bottom.width != top.width:
+            bottom = bottom.resize(
+                (top.width, round(bottom.height * top.width / bottom.width)),
+                Image.LANCZOS,
+            )
+        # 两张图各带一圈 16px 页边, 裁掉下图的上边距, 两张卡片的间距和外边距一致
+        pad = round(16 * top.width / width)
+        bottom = bottom.crop((0, pad, bottom.width, bottom.height))
+        canvas = Image.new("RGB", (top.width, top.height + bottom.height))
+        canvas.paste(top, (0, 0))
+        canvas.paste(bottom, (0, top.height))
+        canvas.save(out_path, "JPEG", quality=90)
 
     def _context(
         self,
