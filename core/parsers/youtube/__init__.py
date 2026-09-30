@@ -3,14 +3,15 @@ from typing import ClassVar
 
 import msgspec
 from aiohttp import ClientError
+from astrbot.api import logger
 from msgspec import Struct
 
-from astrbot.api import logger
-
-from ..config import PluginConfig
-from ..cookie import CookieJar
-from ..download import Downloader
-from .base import BaseParser, Platform, handle
+from ...config import PluginConfig
+from ...cookie import CookieJar
+from ...data import ImageContent, MediaContent, SendGroup, VideoContent
+from ...download import Downloader, VideoInfo
+from ..base import BaseParser, Platform, handle
+from .card import YouTubeCardRenderer
 
 
 class YouTubeParser(BaseParser):
@@ -24,6 +25,11 @@ class YouTubeParser(BaseParser):
             logger.warning("油管Cookie未配置，将无法解析相关媒体")
         self.headers.update({"Referer": "https://www.youtube.com/"})
         self.cookiejar = CookieJar(config, self.mycfg, domain="youtube.com")
+        self.card = (
+            YouTubeCardRenderer(self)
+            if self.mycfg.poster_render_enable is not False
+            else None
+        )
 
     @handle("youtu", r"youtu\.be/[A-Za-z\d\._\?%&\+\-=/#]+")
     @handle(
@@ -36,23 +42,16 @@ class YouTubeParser(BaseParser):
     async def parse_video(self, searched: re.Match[str]):
         # 从匹配对象中获取原始URL
         url = searched.group(0)
+        video_info, author = await self._fetch_info(url)
 
-        video_info = await self.downloader.ytdlp_extract_info(
-            url,
-            cookiefile=self.cookiejar.cookie_file,
-            headers=self.headers,
-            proxy=self.proxy,
-        )
-        author = await self._fetch_author_info(video_info.channel_id)
-
-        contents = []
+        contents: list[MediaContent] = []
         if video_info.duration <= self.cfg.max_duration:
+            # 优先 H.264 + AAC, 默认挑出来的 AV1 / Opus 在不少 QQ 客户端上播不了
             video = self.downloader.ytdlp_download_video(
                 url,
                 cookiefile=self.cookiejar.cookie_file,
-                headers=self.headers,
                 proxy=self.proxy,
-                format="bv*[height<=720]+ba/b[height<=720]",
+                format="bv*[height<=720][vcodec^=avc]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]",
                 node=True,
             )
             contents.append(
@@ -62,49 +61,66 @@ class YouTubeParser(BaseParser):
                     video_info.duration,
                 )
             )
-        else:
-            contents.extend(self.create_image_contents([video_info.thumbnail]))
+        return self._build_result(video_info, author, contents)
 
-        return self.result(
-            title=video_info.title,
-            author=author,
-            contents=contents,
-            timestamp=video_info.timestamp,
-        )
-
+    # 关键词按长度倒序匹配, 写短了会被 youtube / youtu 抢走, 永远走不到音频解析
     @handle(
-        "ym",
-        r"^ym(?P<url>https?://(?:www\.)?(youtu\.be/[A-Za-z\d_-]+|youtube\.com/(?:watch|shorts)(?:\?v=[A-Za-z\d_-]+|/[A-Za-z\d_-]+)))",
+        "ymhttps://",
+        r"^ym(?P<url>https://(?:www\.)?(youtu\.be/[A-Za-z\d_-]+|youtube\.com/(?:watch|shorts)(?:\?v=[A-Za-z\d_-]+|/[A-Za-z\d_-]+)))",
     )
     async def ym(self, searched: re.Match[str]):
         """获取油管的音频(需加ym前缀)"""
         url = searched.group("url")
-        video_info = await self.downloader.ytdlp_extract_info(
-            url,
-            cookiefile=self.cookiejar.cookie_file,
-            headers=self.headers,
-            proxy=self.proxy,
-        )
-        author = await self._fetch_author_info(video_info.channel_id)
+        video_info, author = await self._fetch_info(url)
 
-        contents = []
-        contents.extend(self.create_image_contents([video_info.thumbnail]))
-
+        contents: list[MediaContent] = []
         if video_info.duration <= self.cfg.max_duration:
             audio_task = self.downloader.ytdlp_download_audio(
                 url,
                 cookiefile=self.cookiejar.cookie_file,
-                headers=self.headers,
                 proxy=self.proxy,
             )
             contents.append(
                 self.create_audio_content(audio_task, duration=video_info.duration)
             )
+        return self._build_result(video_info, author, contents)
+
+    async def _fetch_info(self, url: str):
+        # 不传请求头, 插件通用 UA 太老, 油管会返回残缺数据 (缺发布时间等)
+        video_info = await self.downloader.ytdlp_extract_info(
+            url, cookiefile=self.cookiejar.cookie_file, proxy=self.proxy
+        )
+        return video_info, await self._fetch_author_info(video_info.channel_id)
+
+    def _build_result(
+        self, video_info: VideoInfo, author, contents: list[MediaContent]
+    ):
+        video = next((c for c in contents if isinstance(c, VideoContent)), None)
+        cover = (
+            video.cover
+            if video
+            else self.downloader.download_img(
+                video_info.thumbnail, headers=self.headers, proxy=self.proxy
+            )
+        )
+        send_groups = []
+        if self.card is not None:
+            card = self.card.build(video_info, author.avatar, cover)
+            send_groups = [
+                SendGroup(contents=[card], force_merge=False, render_card=False)
+            ]
+            if contents:
+                send_groups.append(SendGroup(contents=contents, render_card=False))
+        elif video is None:
+            # 没有卡片也没有视频 (超时长 / 音频), 封面单独发一张
+            contents = [ImageContent(cover), *contents]
 
         return self.result(
+            url=video_info.webpage_url,
             title=video_info.title,
             author=author,
             contents=contents,
+            send_groups=send_groups,
             timestamp=video_info.timestamp,
         )
 

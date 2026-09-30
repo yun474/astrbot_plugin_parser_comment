@@ -87,14 +87,24 @@ class VideoInfo(Struct):
     """上传者 id"""
     duration: int
     """时长"""
-    timestamp: int
-    """发布时间戳"""
     thumbnail: str
     """封面图片"""
     description: str
     """简介"""
     channel_id: str
     """频道 id"""
+    timestamp: int | None = None
+    """发布时间戳, 部分站点只给 upload_date"""
+    upload_date: str | None = None
+    """发布日期 YYYYMMDD"""
+    uploader_id: str | None = None
+    """油管频道的 @handle"""
+    channel_is_verified: bool | None = None
+    channel_follower_count: int | None = None
+    view_count: int | None = None
+    like_count: int | None = None
+    comment_count: int | None = None
+    webpage_url: str | None = None
 
     @property
     def author_name(self) -> str:
@@ -367,8 +377,10 @@ class Downloader:
         opts = {
             "quiet": True,
             "skip_download": True,
-            "http_headers": headers or self.default_headers,
         }
+        # 不传请求头时交给 yt-dlp 自己挑, 油管对老旧 UA 会返回残缺的页面数据
+        if headers:
+            opts["http_headers"] = headers
         if proxy:
             opts["proxy"] = proxy
         if cookiefile and cookiefile.is_file():
@@ -395,8 +407,9 @@ class Downloader:
         opts = {
             "quiet": True,
             "skip_download": True,
-            "http_headers": headers or self.default_headers,
         }
+        if headers:
+            opts["http_headers"] = headers
         if proxy:
             opts["proxy"] = proxy
         if cookiefile and cookiefile.is_file():
@@ -443,8 +456,9 @@ class Downloader:
             "postprocessors": [
                 {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
             ],
-            "http_headers": headers or self.default_headers,
         }
+        if headers:
+            opts["http_headers"] = headers
         if proxy:
             opts["proxy"] = proxy
         if cookiefile and cookiefile.is_file():
@@ -488,12 +502,13 @@ class Downloader:
             "postprocessors": [
                 {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
             ],
-            "http_headers": headers or self.default_headers,
             "quiet": True,
             "no_warnings": True,
         }
         if not opts["format"]:
             opts.pop("format")
+        if headers:
+            opts["http_headers"] = headers
         if proxy:
             opts["proxy"] = proxy
         if cookiefile and cookiefile.is_file():
@@ -538,8 +553,9 @@ class Downloader:
                 }
             ],
             "cookiefile": None,
-            "http_headers": headers or self.default_headers,
         }
+        if headers:
+            opts["http_headers"] = headers
         if proxy:
             opts["proxy"] = proxy
         if cookiefile and cookiefile.is_file():

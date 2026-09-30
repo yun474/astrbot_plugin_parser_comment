@@ -1,0 +1,130 @@
+{% extends "bili_base.html" %}
+{% block style %}
+/* 推文多是西文, 西文字体排前面, 不然弯引号会落到中文字体上变成全角 */
+#root {
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "PluginFont",
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+    "PluginSymbols1", "PluginSymbols2", sans-serif;
+}
+:root { --text1: #0F1419; --text2: #536471; --text3: #536471; --line: #EFF3F4; --border: #CFD9DE; --x-blue: #1D9BF0; }
+.card { border-radius: 16px; }
+.tweet { padding: 18px 20px 4px; }
+.head { display: flex; align-items: center; gap: 10px; }
+.head .avatar, .head .avatar-fallback { width: 48px; height: 48px; font-size: 20px; }
+.avatar-fallback { background: var(--x-blue); }
+.who { flex: 1; min-width: 0; }
+.name { display: flex; align-items: center; gap: 3px; font-size: 16px; font-weight: 700; line-height: 21px; }
+.name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.handle { color: var(--text2); font-size: 15px; line-height: 20px; }
+.badge { width: 19px; height: 19px; flex: none; }
+.badge.blue { color: var(--x-blue); }
+.badge.gold { color: #E2B719; }
+.badge.gray { color: #829AAB; }
+.logo { font-family: "PluginSymbols1", sans-serif; font-size: 30px; line-height: 1; color: var(--text1); }
+.reply-to { margin-top: 12px; color: var(--text2); }
+.link { color: var(--x-blue); }
+.text {
+  margin-top: 12px; font-size: 17px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 40; -webkit-box-orient: vertical; overflow: hidden;
+}
+.media { display: grid; gap: 2px; margin-top: 12px; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; background: var(--border); }
+.media.n2 { grid-template-columns: 1fr 1fr; height: 300px; }
+.media.n3, .media.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; height: 340px; }
+.media.n3 .cell:first-child { grid-row: span 2; }
+.cell { position: relative; min-height: 0; background: #F7F9F9; }
+.cell img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.media.n1 .cell img { height: auto; max-height: 640px; }
+.media.n1 .empty { height: 300px; }
+.play {
+  position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 4px solid #fff; background: var(--x-blue);
+}
+.play svg { width: 26px; height: 26px; margin-left: 4px; fill: #fff; }
+.dur { position: absolute; left: 12px; bottom: 12px; padding: 0 5px; border-radius: 4px; background: rgba(0, 0, 0, .77); color: #fff; font-size: 13px; line-height: 20px; font-weight: 600; }
+.quote { margin-top: 12px; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+.quote .qhead { display: flex; align-items: center; gap: 4px; padding: 12px 12px 0; font-size: 15px; line-height: 20px; white-space: nowrap; }
+.quote .qhead .avatar, .quote .qhead .avatar-fallback { width: 22px; height: 22px; font-size: 11px; margin-right: 2px; }
+.quote .qhead b { overflow: hidden; text-overflow: ellipsis; }
+.quote .qhead .badge { width: 17px; height: 17px; }
+.quote .qhead .handle { overflow: hidden; text-overflow: ellipsis; }
+.quote .text { margin: 4px 12px 12px; font-size: 15px; -webkit-line-clamp: 8; }
+.quote .gap { height: 12px; }
+.quote .media { margin: 0; border: 0; border-radius: 0; }
+.quote .media.n1 .cell img { max-height: 420px; }
+.time { margin-top: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); color: var(--text2); }
+.time b { color: var(--text1); }
+.stats { display: flex; justify-content: space-between; padding: 12px 16px 14px; color: var(--text2); }
+.stat { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.stat .icon { width: 20px; height: 20px; stroke-width: 1.7; }
+{% endblock %}
+{% macro badge(kind) %}{% if kind %}<svg class="badge {{ kind }}"><use href="#x-verified"/></svg>{% endif %}{% endmacro %}
+{% macro avatar(t) %}{% if t.avatar %}<img class="avatar" src="{{ t.avatar }}">{% else %}<div class="avatar-fallback">{{ t.name[:1] }}</div>{% endif %}{% endmacro %}
+{% macro media_grid(items) %}
+{% if items %}
+<div class="media n{{ items|length }}">
+  {% for m in items %}
+  <div class="cell{% if not m.src %} empty{% endif %}">
+    {% if m.src %}<img src="{{ m.src }}">{% endif %}
+    {% if m.type == "video" %}
+    <div class="play"><svg viewBox="0 0 24 24"><path d="M6 3.8v16.4L20 12z"/></svg></div>
+    <span class="dur">{{ m.duration }}</span>
+    {% elif m.type == "gif" %}<span class="dur">GIF</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+{% block body %}
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="x-verified" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M8.33 3.13Q12 -.4 15.67 3.13Q20.77 3.23 20.87 8.33Q24.4 12 20.87 15.67Q20.77 20.77 15.67 20.87Q12 24.4 8.33 20.87Q3.23 20.77 3.13 15.67Q-.4 12 3.13 8.33Q3.23 3.23 8.33 3.13Z"/>
+    <path d="M7.6 12.3l3 3 5.8-6.3" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="x-reply" viewBox="0 0 24 24">
+    <path d="M9.5 4.5h5a7 7 0 0 1 0 14h-2l-5 3v-3.5a7 7 0 0 1 2-13.5z"/>
+  </symbol>
+  <symbol id="x-retweet" viewBox="0 0 24 24">
+    <path d="M4.5 7.5l3-3 3 3M7.5 4.5v10a3 3 0 0 0 3 3h4M19.5 16.5l-3 3-3-3M16.5 19.5v-10a3 3 0 0 0-3-3h-4"/>
+  </symbol>
+  <symbol id="x-like" viewBox="0 0 24 24">
+    <path d="M12 20l-7.5-7.6a4.6 4.6 0 0 1 6.5-6.5l1 1 1-1a4.6 4.6 0 0 1 6.5 6.5z"/>
+  </symbol>
+  <symbol id="x-bookmark" viewBox="0 0 24 24">
+    <path d="M6.5 3.5h11v17l-5.5-4-5.5 4z"/>
+  </symbol>
+</svg>
+<div class="card">
+  <div class="tweet">
+    <div class="head">
+      {{ avatar(tweet) }}
+      <div class="who">
+        <div class="name"><span>{{ tweet.name }}</span>{{ badge(tweet.badge) }}</div>
+        <div class="handle">@{{ tweet.handle }}</div>
+      </div>
+      <div class="logo">&#x1D54F;</div>
+    </div>
+    {% if tweet.reply_to %}<div class="reply-to">回复 <span class="link">@{{ tweet.reply_to }}</span></div>{% endif %}
+    {% if tweet.text %}<div class="text">{{ tweet.text }}</div>{% endif %}
+    {{ media_grid(tweet.media) }}
+    {% if quote %}
+    <div class="quote">
+      <div class="qhead">
+        {{ avatar(quote) }}<b>{{ quote.name }}</b>{{ badge(quote.badge) }}
+        <span class="handle">@{{ quote.handle }} · {{ quote.date }}</span>
+      </div>
+      {% if quote.text %}<div class="text">{{ quote.text }}</div>{% else %}<div class="gap"></div>{% endif %}
+      {{ media_grid(quote.media) }}
+    </div>
+    {% endif %}
+    <div class="time">{{ tweet.time }}{% if tweet.views %} · <b>{{ tweet.views }}</b> 查看{% endif %}</div>
+  </div>
+  <div class="stats">
+    {% for icon, value in tweet.stats %}
+    <div class="stat"><svg class="icon"><use href="#x-{{ icon }}"/></svg>{{ value }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

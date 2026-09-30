@@ -59,7 +59,7 @@
     },
     "render_engine": {
         "description": "HTML 渲染引擎",
-        "hint": "B站视频海报和评论区图片用 HTML 模板渲染。自动：优先本地 Playwright（首次使用会自动下载约 150 MB 的 Chromium，Linux 缺系统库时请手动执行 playwright install --with-deps chromium），不可用时退回 AstrBot 自带的网络文转图接口；也可以强制指定其中一种。",
+        "hint": "B站视频海报、小红书 / 推特 / 油管卡片和评论区图片用 HTML 模板渲染。自动：优先本地 Playwright（首次使用会自动下载约 150 MB 的 Chromium，Linux 缺系统库时请手动执行 playwright install --with-deps chromium），不可用时退回 AstrBot 自带的网络文转图接口；也可以强制指定其中一种。",
         "type": "string",
         "options": [
             "auto",
@@ -589,6 +589,12 @@
                         "hint": "必填! 同时注意油管Cookie有效期较短",
                         "type": "text",
                         "default": ""
+                    },
+                    "poster_render_enable": {
+                        "description": "渲染视频卡片",
+                        "hint": "开启后先发一张 YouTube 风格的视频卡片（封面与时长、标题、频道与订阅数、点赞 / 评论数、观看次数、发布日期和简介），再发送视频或音频；超过时长限制时只发卡片。关闭后沿用默认卡片。",
+                        "type": "bool",
+                        "default": true
                     }
                 }
             },
@@ -626,11 +632,11 @@
                         "type": "bool",
                         "default": true
                     },
-                    "cookies": {
-                        "description": "Cookies",
-                        "hint": "选填",
-                        "type": "text",
-                        "default": ""
+                    "poster_render_enable": {
+                        "description": "渲染推文卡片",
+                        "hint": "开启后先发一张 X 风格的推文卡片（头像与认证标、正文、配图宫格、引用推文、发布时间、浏览量和回复 / 转帖 / 喜欢 / 书签数），再发送原图和视频；纯文字推文只发卡片。数据来自 fxtwitter 公开接口，无需 Cookie。关闭后沿用默认卡片。",
+                        "type": "bool",
+                        "default": true
                     }
                 }
             },
