@@ -63,6 +63,8 @@ class ParserPlugin(Star):
 
     async def terminate(self):
         """插件卸载时触发"""
+        # 先关最占内存的浏览器, 后面的清理出错也不会留下 Chromium
+        await BaseParser.close_html_renderer()
         unique_parsers = set(self.parser_map.values())
         for parser in unique_parsers:
             if service := getattr(parser, "comment_service", None):
@@ -72,8 +74,6 @@ class ParserPlugin(Star):
         # 关所有解析器里的会话 (去重后的实例)
         for parser in unique_parsers:
             await parser.close_session()
-        # 关 HTML 渲染用的浏览器
-        await BaseParser.close_html_renderer()
         # 关缓存清理器
         await self.cleaner.stop()
 

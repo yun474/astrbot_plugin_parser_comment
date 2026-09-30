@@ -14,12 +14,10 @@ async def load_gallery_images(parser, vid: str, images):
         return images
 
     try:
-        browser = await parser.html_renderer._get_browser()
         options = {"locale": "zh-CN"}
         if parser.proxy:
             options["proxy"] = {"server": parser.proxy}
-        context = await browser.new_context(**options)
-        try:
+        async with parser.html_renderer.browser_context(**options) as context:
             cookies = [
                 {
                     "name": c.name,
@@ -70,8 +68,6 @@ async def load_gallery_images(parser, vid: str, images):
                     dict.fromkeys([*original.url_list, *full.url_list])
                 )
             return full_images
-        finally:
-            await context.close()
     except Exception as e:
         logger.warning(
             f"[抖音] 实况视频获取失败，保留分享页图片: {type(e).__name__}: {e}"

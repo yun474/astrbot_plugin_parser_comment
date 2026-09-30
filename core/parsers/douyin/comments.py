@@ -98,13 +98,11 @@ class DouyinCommentService:
     async def _fetch_comments(
         self, vid: str, *, kind: str = "video"
     ) -> tuple[list[dict], int]:
-        # 浏览器由共享 HTML 渲染器统一管理，每次读取用独立 context 隔离 Cookie。
-        browser = await self.parser.html_renderer._get_browser()
+        # 浏览器由共享 HTML 渲染器统一管理（空闲自动退出），每次读取用独立 context 隔离 Cookie。
         options = {"locale": "zh-CN"}
         if self.parser.proxy:
             options["proxy"] = {"server": self.parser.proxy}
-        context = await browser.new_context(**options)
-        try:
+        async with self.parser.html_renderer.browser_context(**options) as context:
             cookies = [
                 {
                     "name": c.name,
@@ -181,8 +179,6 @@ class DouyinCommentService:
                         )
                         break
                 return result[: self.limit], total
-        finally:
-            await context.close()
 
     @staticmethod
     def _image_url(image) -> str:

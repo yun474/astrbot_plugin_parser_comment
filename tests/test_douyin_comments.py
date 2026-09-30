@@ -37,6 +37,14 @@ def service(module, tmp_path, **settings):
     return module.DouyinCommentService(parser)
 
 
+def renderer_with(browser):
+    from core.html_render import HtmlRenderer
+
+    renderer = HtmlRenderer(SimpleNamespace(render_engine="playwright"))
+    renderer._get_browser = AsyncMock(return_value=browser)
+    return renderer
+
+
 def comment(cid="1", **kwargs):
     return {"cid": cid, "text": "测试评论", "user": {"nickname": "用户"}, **kwargs}
 
@@ -209,9 +217,7 @@ def test_browser_pagination_deduplicates_and_closes(
             new_page=AsyncMock(return_value=page), close=AsyncMock()
         )
         browser = SimpleNamespace(new_context=AsyncMock(return_value=context))
-        svc.parser.html_renderer = SimpleNamespace(
-            _get_browser=AsyncMock(return_value=browser)
-        )
+        svc.parser.html_renderer = renderer_with(browser)
         comments, total = await svc._fetch_comments("123", kind="note")
         assert page.goto.call_args.args[0] == "https://www.douyin.com/note/123"
         if initial_cursor:
@@ -234,9 +240,7 @@ def test_browser_context_closed_on_navigation_failure(module, tmp_path):
             new_page=AsyncMock(side_effect=OSError), close=AsyncMock()
         )
         browser = SimpleNamespace(new_context=AsyncMock(return_value=context))
-        svc.parser.html_renderer = SimpleNamespace(
-            _get_browser=AsyncMock(return_value=browser)
-        )
+        svc.parser.html_renderer = renderer_with(browser)
         with pytest.raises(OSError):
             await svc._fetch_comments("123")
         context.close.assert_awaited_once()

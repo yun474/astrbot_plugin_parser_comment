@@ -8,6 +8,7 @@ import asyncio
 import base64
 import sys
 import uuid
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -103,6 +104,8 @@ class HtmlRenderer:
     SCALE = 2
     """Playwright 截图倍率, 文字在手机上看也清晰"""
     JPEG_QUALITY = 90
+    IDLE_TIMEOUT = 120
+    """浏览器空闲多少秒后整个退出, 常驻的 Chromium 很吃内存"""
 
     def __init__(self, cfg: PluginConfig):
         self.cfg = cfg
@@ -110,6 +113,8 @@ class HtmlRenderer:
         self._playwright = None
         self._browser = None
         self._startup_task = None
+        self._idle_task = None
+        self._active = 0
         self._lock = asyncio.Lock()
         self._render_slots = asyncio.Semaphore(2)
         self._install_tried = False
@@ -121,7 +126,7 @@ class HtmlRenderer:
         """渲染模板并截图, 返回 out_path (JPEG)"""
         if self.engine != "astrbot" and not self._browser_unavailable:
             try:
-                browser = await self._get_browser()
+                await self._get_browser()
             except Exception as e:
                 if self.engine == "playwright":
                     raise
@@ -133,22 +138,58 @@ class HtmlRenderer:
             else:
                 html = TEMPLATES.get_template(template).render(context)
                 async with self._render_slots:
-                    return await self._screenshot(browser, html, out_path, selector)
+                    return await self._screenshot(html, out_path, selector)
         html = TEMPLATES.get_template(template).render(
             {**context, "symbol_font_urls": inline_symbol_fonts()}
         )
         return await self._render_by_astrbot(html, out_path)
 
     async def close(self):
-        if self._startup_task is not None and not self._startup_task.done():
-            self._startup_task.cancel()
-            await asyncio.gather(self._startup_task, return_exceptions=True)
-        if self._browser is not None:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright is not None:
-            await self._playwright.stop()
-            self._playwright = None
+        for task in (self._idle_task, self._startup_task):
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self._idle_task = None
+        await self._shutdown()
+
+    @asynccontextmanager
+    async def browser_context(self, **options):
+        """借共享浏览器开一个独立 context, 用完即关; 没人用了过一会儿整个浏览器退出"""
+        self._active += 1
+        if self._idle_task is not None:
+            self._idle_task.cancel()
+            self._idle_task = None
+        try:
+            browser = await self._get_browser()
+            context = await browser.new_context(**options)
+            try:
+                yield context
+            finally:
+                await context.close()
+        finally:
+            self._active -= 1
+            if not self._active and self._browser is not None:
+                self._idle_task = asyncio.create_task(self._close_when_idle())
+
+    async def _close_when_idle(self):
+        await asyncio.sleep(self.IDLE_TIMEOUT)
+        async with self._lock:
+            if self._active:
+                return
+            # 关闭过程中来了新请求也不能被打断, 新请求会等锁后重新启动浏览器
+            self._idle_task = None
+            await self._shutdown()
+        logger.debug("[HtmlRender] 浏览器空闲, 已退出释放内存")
+
+    async def _shutdown(self):
+        browser, playwright = self._browser, self._playwright
+        self._browser = self._playwright = None
+        try:
+            if browser is not None:
+                await browser.close()
+        finally:
+            if playwright is not None:
+                await playwright.stop()
 
     async def _get_browser(self):
         if self._browser is not None and self._browser.is_connected():
@@ -210,35 +251,28 @@ class HtmlRenderer:
             )
         logger.info("[HtmlRender] Chromium 安装完成")
 
-    async def _screenshot(
-        self, browser, html: str, out_path: Path, selector: str
-    ) -> Path:
+    async def _screenshot(self, html: str, out_path: Path, selector: str) -> Path:
         # 落成文件再打开, 页面里的 file:// 字体才能加载
         token = uuid.uuid4().hex
         html_path = out_path.with_name(f"{out_path.stem}_{token}.html")
         image_path = html_path.with_suffix(".jpg")
         await asyncio.to_thread(html_path.write_text, html, "utf-8")
-        context = None
         try:
-            async with asyncio.timeout(15):
-                context = await browser.new_context(
-                    viewport={"width": 800, "height": 600},
-                    device_scale_factor=self.SCALE,
-                )
-                page = await context.new_page()
-                await page.goto(html_path.as_uri(), wait_until="load")
-                await page.evaluate("document.fonts.ready")
-                await page.locator(selector).screenshot(
-                    path=str(image_path), type="jpeg", quality=self.JPEG_QUALITY
-                )
-                await asyncio.to_thread(image_path.replace, out_path)
+            async with self.browser_context(
+                viewport={"width": 800, "height": 600},
+                device_scale_factor=self.SCALE,
+            ) as context:
+                async with asyncio.timeout(15):
+                    page = await context.new_page()
+                    await page.goto(html_path.as_uri(), wait_until="load")
+                    await page.evaluate("document.fonts.ready")
+                    await page.locator(selector).screenshot(
+                        path=str(image_path), type="jpeg", quality=self.JPEG_QUALITY
+                    )
+                    await asyncio.to_thread(image_path.replace, out_path)
         finally:
-            try:
-                if context is not None:
-                    await context.close()
-            finally:
-                await safe_unlink(html_path)
-                await safe_unlink(image_path)
+            await safe_unlink(html_path)
+            await safe_unlink(image_path)
         return out_path
 
     async def _render_by_astrbot(self, html: str, out_path: Path) -> Path:

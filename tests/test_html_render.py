@@ -39,8 +39,9 @@ def test_screenshot_failure_cleans_temp_and_preserves_good_output(module, tmp_pa
             new_page=AsyncMock(side_effect=OSError("closed")), close=AsyncMock()
         )
         browser = SimpleNamespace(new_context=AsyncMock(return_value=context))
+        renderer._get_browser = AsyncMock(return_value=browser)
         with pytest.raises(OSError):
-            await renderer._screenshot(browser, "<html/>", output, "#root")
+            await renderer._screenshot("<html/>", output, "#root")
         context.close.assert_awaited_once()
         assert output.read_bytes() == b"existing good image"
         assert list(tmp_path.iterdir()) == [output]
@@ -84,5 +85,34 @@ def test_cancelled_waiter_does_not_cancel_shared_browser_startup(module):
         assert await second is browser
         renderer._start_browser.assert_awaited_once()
         await renderer.close()
+
+    asyncio.run(run())
+
+
+def test_idle_browser_exits_and_reuse_postpones_it(module):
+    async def run():
+        renderer = module.HtmlRenderer(SimpleNamespace(render_engine="playwright"))
+        renderer.IDLE_TIMEOUT = 0.05
+        context = SimpleNamespace(close=AsyncMock())
+        browser = SimpleNamespace(
+            new_context=AsyncMock(return_value=context),
+            is_connected=lambda: True,
+            close=AsyncMock(),
+        )
+        playwright = SimpleNamespace(stop=AsyncMock())
+        renderer._browser, renderer._playwright = browser, playwright
+
+        async with renderer.browser_context():
+            pass
+        await asyncio.sleep(0.03)
+        async with renderer.browser_context():
+            await asyncio.sleep(0.06)
+        browser.close.assert_not_called()
+
+        await asyncio.sleep(0.1)
+        browser.close.assert_awaited_once()
+        playwright.stop.assert_awaited_once()
+        assert renderer._browser is None and renderer._playwright is None
+        assert context.close.await_count == 2
 
     asyncio.run(run())

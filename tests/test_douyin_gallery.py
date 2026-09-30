@@ -34,6 +34,14 @@ def modules(monkeypatch):
     )
 
 
+def renderer_with(browser):
+    from core.html_render import HtmlRenderer
+
+    renderer = HtmlRenderer(SimpleNamespace(render_engine="playwright"))
+    renderer._get_browser = AsyncMock(return_value=browser)
+    return renderer
+
+
 def gallery_payload():
     return {
         "author": {"nickname": "作者", "avatar_thumb": {"url_list": []}},
@@ -204,7 +212,7 @@ def test_web_gallery_enrichment_and_context_cleanup(modules, failure):
         )
         browser = SimpleNamespace(new_context=AsyncMock(return_value=context))
         parser = SimpleNamespace(
-            html_renderer=SimpleNamespace(_get_browser=AsyncMock(return_value=browser)),
+            html_renderer=renderer_with(browser),
             cookiejar=SimpleNamespace(cookies=[]),
             proxy=None,
         )
@@ -236,9 +244,9 @@ def test_complete_gallery_does_not_launch_browser(modules):
     images = msgspec.convert(
         gallery_payload()["images"], type=list[modules.video.Image]
     )
-    parser = SimpleNamespace(html_renderer=SimpleNamespace(_get_browser=AsyncMock()))
+    parser = SimpleNamespace(html_renderer=SimpleNamespace(browser_context=Mock()))
     assert asyncio.run(gallery.load_gallery_images(parser, "123", images)) is images
-    parser.html_renderer._get_browser.assert_not_called()
+    parser.html_renderer.browser_context.assert_not_called()
 
 
 @pytest.mark.parametrize(
