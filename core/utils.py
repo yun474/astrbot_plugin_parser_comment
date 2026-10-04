@@ -5,7 +5,7 @@ import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse
 
 from astrbot.api import logger
 
@@ -191,6 +191,27 @@ def fmt_size(file_path: Path) -> str:
     return f"大小: {file_path.stat().st_size / 1024 / 1024:.2f} MB"
 
 
+# 镜像域名轮换、每次解析都会变的签名 / 过期时间 / 请求日志参数, 不参与缓存命名
+# (域名后缀 -> 参数名), 这些 CDN 上资源只由路径决定
+_VOLATILE_QUERY = {
+    "douyinpic.com": frozenset({"l", "x-expires", "x-signature"}),
+}
+
+
+def stable_url(url: str) -> str:
+    """只用于算缓存键: 同一资源多次解析得到同一个键, 不能拿去下载"""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    for suffix, params in _VOLATILE_QUERY.items():
+        if host == suffix or host.endswith("." + suffix):
+            query = parse_qsl(parsed.query, keep_blank_values=True)
+            return parsed._replace(
+                netloc=suffix,
+                query=urlencode([(k, v) for k, v in query if k not in params]),
+            ).geturl()
+    return url
+
+
 def generate_file_name(url: str, default_suffix: str = "") -> str:
     """根据 url 生成文件名
 
@@ -205,7 +226,7 @@ def generate_file_name(url: str, default_suffix: str = "") -> str:
     path = Path(urlparse(url).path)
     suffix = path.suffix if path.suffix else default_suffix
     # 获取 url 的 md5 值
-    url_hash = hashlib.md5(url.encode()).hexdigest()[:16]
+    url_hash = hashlib.md5(stable_url(url).encode()).hexdigest()[:16]
     file_name = f"{url_hash}{suffix}"
     return file_name
 

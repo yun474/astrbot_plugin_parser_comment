@@ -220,7 +220,10 @@ class IwaraParser(BaseParser):
         send_info = f"视频描述: {video_body}\n\nTAG: {', '.join(f'#{tag}' for tag in video_tags)}"
 
         video_contents = VideoContent(
-            path_task=self.downloader.download_video(video_url),
+            # 直链带过期签名, 按视频 ID + 画质命名
+            path_task=self.downloader.download_video(
+                video_url, video_name=f"iwara_{video_id}_{quality}.mp4"
+            ),
             cover=video_thumbnail_img if video_thumbnail_img else None,
             duration=video_duration,
         )

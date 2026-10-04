@@ -105,10 +105,18 @@ class VideoInfo(Struct):
     like_count: int | None = None
     comment_count: int | None = None
     webpage_url: str | None = None
+    id: str = ""
+    extractor_key: str = ""
 
     @property
     def author_name(self) -> str:
         return f"{self.channel}@{self.uploader}"
+
+    def file_stem(self, url: str) -> str:
+        """按站点 + 视频 id 命名, 分享链接带的 si / igsh 之类追踪参数不影响缓存命中"""
+        if self.id and self.extractor_key:
+            return f"{self.extractor_key}_{self.id}".replace("/", "_")
+        return generate_file_name(url)
 
 
 class Downloader:
@@ -443,7 +451,7 @@ class Downloader:
             )
             raise DurationLimitException
 
-        video_path = self.cfg.cache_dir / generate_file_name(url, ".mp4")
+        video_path = self.cfg.cache_dir / f"{info.file_stem(url)}.mp4"
         if video_path.exists():
             return video_path
 
@@ -489,8 +497,9 @@ class Downloader:
         proxy: str | None = None,
         format: str | None = None,
         node: bool = False,
+        file_stem: str | None = None,
     ) -> Path:
-        file_stem = generate_file_name(url)
+        file_stem = file_stem or generate_file_name(url)
         video_path = self.cfg.cache_dir / f"{file_stem}.mp4"
         if video_path.exists():
             return video_path
@@ -521,7 +530,8 @@ class Downloader:
         if video_path.exists():
             return video_path
 
-        candidates = sorted(self.cfg.cache_dir.glob(f"{file_stem}*.mp4"))
+        # 只认 yt-dlp 给同一 stem 加的格式后缀 (stem.f137.mp4), 免得 id 前缀相同的文件串台
+        candidates = sorted(self.cfg.cache_dir.glob(f"{file_stem}.*.mp4"))
         if candidates:
             return candidates[0]
         logger.error(f"yt-dlp 下载后未找到输出文件 | url: {url}")
@@ -537,7 +547,10 @@ class Downloader:
         proxy: str | None = None,
         format: str | None = None,
     ) -> Path:
-        file_name = generate_file_name(url)
+        info = await self.ytdlp_extract_info(
+            url, cookiefile=cookiefile, headers=headers, proxy=proxy
+        )
+        file_name = info.file_stem(url)
         audio_path = self.cfg.cache_dir / f"{file_name}.flac"
         if audio_path.exists():
             return audio_path

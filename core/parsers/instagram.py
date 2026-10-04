@@ -316,9 +316,10 @@ class InstagramParser(BaseParser):
             return direct_url, None
         return None, None
 
-    def _merged_output_path(self, v_url: str, a_url: str) -> Path:
-        digest = hashlib.md5(f"{v_url}|{a_url}".encode()).hexdigest()[:16]
-        return self.cfg.cache_dir / f"{digest}.mp4"
+    def _merged_output_path(self, v_url: str, a_url: str, stem: str | None) -> Path:
+        """直链带 oh / oe 签名, 每次解析都不同; 有 shortcode 时按帖子 + 序号命名"""
+        stem = stem or hashlib.md5(f"{v_url}|{a_url}".encode()).hexdigest()[:16]
+        return self.cfg.cache_dir / f"{stem}.mp4"
 
     @handle(
         "instagram.com",
@@ -375,6 +376,7 @@ class InstagramParser(BaseParser):
         meta_entry: dict[str, Any] | None = None
         fallback_video_tried = False
         for idx, entry in enumerate(entries):
+            video_stem = f"{base_prefix}_v{idx}" if shortcode else None
             formats = entry.get("formats")
             video_url, audio_url = self._select_media_urls(entry)
             if not video_url and isinstance(formats, list) and formats:
@@ -387,7 +389,9 @@ class InstagramParser(BaseParser):
             if video_url:
                 cover_task = None
                 if audio_url:
-                    output_path = self._merged_output_path(video_url, audio_url)
+                    output_path = self._merged_output_path(
+                        video_url, audio_url, video_stem
+                    )
                     if output_path.exists():
                         video_task = output_path
                     else:
@@ -404,7 +408,7 @@ class InstagramParser(BaseParser):
                     if single_entry:
                         v_url, a_url = self._select_media_urls(info)
                     if a_url and v_url:
-                        output_path = self._merged_output_path(v_url, a_url)
+                        output_path = self._merged_output_path(v_url, a_url, video_stem)
                         if output_path.exists():
                             video_task = output_path
                         else:

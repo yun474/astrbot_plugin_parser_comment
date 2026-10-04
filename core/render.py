@@ -1,5 +1,5 @@
 import asyncio
-import uuid
+import hashlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache, wraps
@@ -473,7 +473,9 @@ class Renderer:
                 return await result.get_card_path()
             except Exception as e:
                 logger.warning(f"解析器自带卡片渲染失败, 改用默认卡片: {e}")
-        cache = self.cfg.cache_dir / f"card_{uuid.uuid4().hex}.png"
+        cache = self.cfg.cache_dir / f"card_{self._card_key(result)}.png"
+        if cache.exists():
+            return cache
         try:
             img = await self._create_card_image(result)
             buf = BytesIO()
@@ -488,12 +490,26 @@ class Renderer:
             )
             return None
 
+    @staticmethod
+    def _card_key(result: ParseResult) -> str:
+        """卡片上的文字 + 资源指纹 (含转发链), 同一内容只画一次"""
+        parts = []
+        node: ParseResult | None = result
+        while node is not None:
+            parts += [node.get_resource_id(), node.title, node.text, node.extra_info]
+            node = node.repost
+        return hashlib.sha256(repr(parts).encode()).hexdigest()[:16]
+
     async def render_gallery(self, paths: list[Path]) -> Path | None:
         """把多张图片按原比例拼成一张长图并落盘，失败返回 None
 
         给官 Bot 这类不能合并转发的场景用：图集只占一条消息。
         """
-        out = self.cfg.cache_dir / f"gallery_{uuid.uuid4().hex}.jpg"
+        # 素材文件名本身就是按资源算的, 同一组图拼出来的结果可以复用
+        digest = hashlib.sha256("|".join(p.name for p in paths).encode()).hexdigest()
+        out = self.cfg.cache_dir / f"gallery_{digest[:16]}.jpg"
+        if out.exists():
+            return out
         try:
             image = await asyncio.to_thread(self._compose_gallery, paths)
             await asyncio.to_thread(image.save, out, format="JPEG", quality=88)

@@ -109,7 +109,15 @@ class BilibiliParser(BaseParser):
         _, a_url = await self.extract_download_urls(bvid=bvid, page_index=page - 1)
         if not a_url:
             raise ParseException("未找到音频链接")
-        audio = self.create_audio_content(a_url)
+        # 音频直链带签名参数, 按 BV 号 + 分 P 命名才能复用缓存
+        audio = self.create_audio_content(
+            self.downloader.download_audio(
+                a_url,
+                audio_name=f"{bvid}-{page}-audio.m4a",
+                headers=self.headers,
+                proxy=self.proxy,
+            )
+        )
         return self.result(
             title=f"BiliBili_audio_{bvid}",
             contents=[audio],

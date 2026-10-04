@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import uuid
 from asyncio import Task
 from datetime import datetime
 from pathlib import Path
@@ -63,12 +62,8 @@ class TweetCardRenderer:
                 if quote
                 else None,
             }
-            out_path = (
-                self.parser.cfg.cache_dir
-                / f"x_tweet_{tweet.id}_{uuid.uuid4().hex[:8]}.jpg"
-            )
-            return await self.parser.html_renderer.render(
-                self.TEMPLATE, context, out_path
+            return await self.parser.html_renderer.render_cached(
+                self.TEMPLATE, context, f"x_tweet_{tweet.id}"
             )
         except Exception as e:
             logger.warning(f"[推特] 卡片渲染失败 ({type(e).__name__}): {str(e)[:200]}")

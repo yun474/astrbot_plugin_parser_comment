@@ -1,5 +1,7 @@
+from pathlib import Path
 from re import Match
 from typing import ClassVar
+from urllib.parse import urlparse
 
 from aiohttp import ClientError
 
@@ -7,7 +9,7 @@ from ..config import PluginConfig
 from ..cookie import CookieJar
 from ..data import Platform
 from ..download import Downloader
-from .base import BaseParser, handle
+from .base import BaseParser, ParseException, handle
 
 
 class NCMParser(BaseParser):
@@ -42,7 +44,7 @@ class NCMParser(BaseParser):
         async with self.session.get(detail_url, headers=self.headers) as resp:
             if resp.status >= 400:
                 raise ClientError(f"[NCM] 获取歌曲信息失败 HTTP {resp.status}")
-            detail_json = await resp.json()
+            detail_json = await resp.json(content_type=None)
             print(f"歌曲信息: {detail_json}")
 
         song = detail_json.get("songs", [{}])[0]
@@ -50,7 +52,7 @@ class NCMParser(BaseParser):
             raise ValueError("[NCM] 未找到该歌曲")
 
         title = song.get("name", "")
-        sub_title = song.get("alias", [""])[0]  # 别名
+        sub_title = (song.get("alias") or [""])[0]  # 别名
         album_name = song.get("album", {}).get("name", "")
         cover_url = song.get("album", {}).get("picUrl", "") + "?param=640y640"
         duration_ms = song.get("duration", 0)
@@ -64,14 +66,23 @@ class NCMParser(BaseParser):
         async with self.session.get(play_url, headers=self.headers) as resp:
             if resp.status >= 400:
                 raise ClientError(f"[NCM] 获取播放地址失败 HTTP {resp.status}")
-            play_json = await resp.json()
+            play_json = await resp.json(content_type=None)
         play_info = play_json.get("data", [{}])[0]
-        audio_url = play_info.get("url", "")
+        audio_url = play_info.get("url")
+        if not audio_url:
+            raise ParseException(
+                "获取不到播放地址, 可能是 VIP / 无版权歌曲或 Cookie 失效"
+            )
 
         # 3. 组装结果
         author = self.create_author(author_name, author_avatar)
+        # 播放直链的路径里就带时间戳签名, 按歌曲 ID 命名
+        suffix = Path(urlparse(audio_url).path).suffix or ".mp3"
         audio = self.create_video_content(
-            audio_url, cover_url, duration=duration_ms // 1000
+            audio_url,
+            cover_url,
+            duration=duration_ms // 1000,
+            video_name=f"ncm_{song_id}{suffix}",
         )
 
         # 4. 返回

@@ -301,9 +301,7 @@ class DouyinParser(BaseParser):
             images = await load_gallery_images(self, vid, images)
         contents = self._create_gallery_contents(images, headers)
         has_dynamic = any(isinstance(c, DynamicContent) for c in contents)
-        if self.mycfg.gallery_merge_video and (
-            len(contents) >= 2 or has_dynamic
-        ):
+        if self.mycfg.gallery_merge_video and (len(contents) >= 2 or has_dynamic):
             from ...exception import DownloadException
             from .gallery_video import merge_gallery_video
 
@@ -401,8 +399,10 @@ class DouyinParser(BaseParser):
         """优先走 play 端点按配置清晰度挑流, 失败时回退到 play_addr 里的直链"""
         headers = self._build_media_headers(referer)
         video_urls = video_data.video_urls
-        video_name = None
-        if play_token := video_data.play_token:
+        play_token = video_data.play_token
+        # play_addr 直链的路径里带签名, 探测失败回退时也按视频 ID 命名
+        video_name = f"douyin_{play_token}.mp4" if play_token else None
+        if play_token:
             try:
                 probed = await self.probe_video_url(play_token, referer)
                 logger.debug(

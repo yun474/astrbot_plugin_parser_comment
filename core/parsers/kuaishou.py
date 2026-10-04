@@ -67,9 +67,15 @@ class KuaiShouParser(BaseParser):
 
         # 添加视频内容
         if video_url := photo.video_url:
+            # CDN 线路随机挑, 直链每次都不一样, 按作品 ID 命名才能复用缓存
+            photo_id = re.search(r"/(?:photo|short-video)/(\w+)", real_url)
             contents.append(
                 self.create_video_content(
-                    video_url, photo.cover_url, photo.duration, headers=self.ios_headers
+                    video_url,
+                    photo.cover_url,
+                    photo.duration,
+                    headers=self.ios_headers,
+                    video_name=f"kuaishou_{photo_id[1]}.mp4" if photo_id else None,
                 )
             )
 

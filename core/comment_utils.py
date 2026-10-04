@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from time import monotonic, time
+from time import monotonic
 
 
 class CommentImageCache:
@@ -16,10 +16,11 @@ class CommentImageCache:
         self._ready: dict[tuple, tuple[float, Path]] = {}
         self._pending: dict[tuple, asyncio.Task] = {}
 
-    def is_fresh(self, path: Path) -> bool:
+    @staticmethod
+    def is_cached(path: Path) -> bool:
+        """评论图按内容摘要命名, 文件在就说明同样的内容已经渲染过"""
         try:
-            stat = path.stat()
-            return stat.st_size > 100 and time() - stat.st_mtime < self.TTL
+            return path.stat().st_size > 100
         except FileNotFoundError:
             return False
 

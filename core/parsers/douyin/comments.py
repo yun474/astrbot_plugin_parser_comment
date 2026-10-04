@@ -15,6 +15,7 @@ from ...comment_utils import CommentImageCache, download_comment_assets
 from ...data import DynamicContent, ImageContent, SendGroup
 from ...exception import DownloadLimitException
 from ...html_render import image_data_uri
+from ...utils import stable_url
 
 
 class DouyinCommentService:
@@ -226,6 +227,16 @@ class DouyinCommentService:
             "replies": replies,
         }
 
+    @classmethod
+    def _seed_comment(cls, comment: dict) -> dict:
+        """图片链接每次都带新的签名参数, 去掉后再参与摘要, 否则缓存永远不命中"""
+        return {
+            **comment,
+            "avatar_url": stable_url(comment["avatar_url"]),
+            "picture_urls": [stable_url(u) for u in comment["picture_urls"]],
+            "replies": [cls._seed_comment(r) for r in comment["replies"]],
+        }
+
     async def _attach_assets(self, comments):
         async def download(url):
             if not url:
@@ -288,13 +299,20 @@ class DouyinCommentService:
             if not comments:
                 raise DownloadLimitException("抖音评论区为空或不可见")
             seed = json.dumps(
-                [2, title, author, total, self.show_replies, comments],
+                [
+                    2,
+                    title,
+                    author,
+                    total,
+                    self.show_replies,
+                    [self._seed_comment(c) for c in comments],
+                ],
                 ensure_ascii=False,
                 sort_keys=True,
             )
             digest = hashlib.sha256(seed.encode()).hexdigest()[:16]
             path = self.parser.cfg.cache_dir / f"douyin_comments_{vid}_{digest}.jpg"
-            if self.image_cache.is_fresh(path):
+            if self.image_cache.is_cached(path):
                 return path
             stage = "下载配图"
             await self._attach_assets(comments)

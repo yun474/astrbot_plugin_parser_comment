@@ -540,7 +540,7 @@ class BiliCommentService:
             out_path = (
                 self.parser.cfg.cache_dir / f"bili_comments_{oid}_{cache_key}.jpg"
             )
-            if self.image_cache.is_fresh(out_path):
+            if self.image_cache.is_cached(out_path):
                 return out_path
 
             stage = "下载配图"

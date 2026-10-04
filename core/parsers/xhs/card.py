@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import uuid
 from asyncio import Task
 from datetime import datetime
 from pathlib import Path
@@ -64,12 +63,8 @@ class XHSCardRenderer:
                 show_note,
             )
             kind = "note" if show_note else "comments"
-            out_path = (
-                self.parser.cfg.cache_dir
-                / f"xhs_{kind}_{note.noteId}_{uuid.uuid4().hex[:8]}.jpg"
-            )
-            return await self.parser.html_renderer.render(
-                self.TEMPLATE, context, out_path
+            return await self.parser.html_renderer.render_cached(
+                self.TEMPLATE, context, f"xhs_{kind}_{note.noteId}"
             )
         except Exception as e:
             logger.warning(

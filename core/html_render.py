@@ -6,6 +6,7 @@
 
 import asyncio
 import base64
+import hashlib
 import sys
 import uuid
 from contextlib import asynccontextmanager
@@ -143,6 +144,15 @@ class HtmlRenderer:
             {**context, "symbol_font_urls": inline_symbol_fonts()}
         )
         return await self._render_by_astrbot(html, out_path)
+
+    async def render_cached(self, template: str, context: dict, name: str) -> Path:
+        """按页面内容命名截图, 内容 (含内联图片) 没变就直接复用上次的图"""
+        html = TEMPLATES.get_template(template).render(context)
+        digest = hashlib.sha256(html.encode()).hexdigest()[:16]
+        out_path = self.cfg.cache_dir / f"{name}_{digest}.jpg"
+        if out_path.exists():
+            return out_path
+        return await self.render(template, context, out_path)
 
     async def close(self):
         for task in (self._idle_task, self._startup_task):

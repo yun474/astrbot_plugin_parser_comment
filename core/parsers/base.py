@@ -262,8 +262,13 @@ class BaseParser:
         cover_url: str | None = None,
         duration: float = 0.0,
         headers: dict[str, str] | None = None,
+        video_name: str | None = None,
     ):
-        """创建视频内容"""
+        """创建视频内容
+
+        Args:
+            video_name: 缓存文件名, 直链带签名参数时按作品 ID 命名, 重复解析不再重新下载
+        """
         cover_task = None
         if cover_url:
             cover_task = self.downloader.download_img(
@@ -271,7 +276,10 @@ class BaseParser:
             )
         if isinstance(url_or_task, str):
             url_or_task = self.downloader.download_video(
-                url_or_task, headers=headers or self.headers, proxy=self.proxy
+                url_or_task,
+                video_name=video_name,
+                headers=headers or self.headers,
+                proxy=self.proxy,
             )
 
         return VideoContent(url_or_task, cover_task, duration)

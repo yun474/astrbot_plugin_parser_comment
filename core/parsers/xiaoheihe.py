@@ -198,7 +198,7 @@ class XiaoheiheParser(BaseParser):
         author = self._build_author(link)
 
         body_text, image_urls = self._parse_body_text_and_images(link)
-        video_content = self._build_video_content(link)
+        video_content = self._build_video_content(link, link_id)
         show_body_text = bool(self.mycfg.show_body_text)
         text_content = TextContent(body_text) if show_body_text and body_text else None
 
@@ -621,26 +621,32 @@ class XiaoheiheParser(BaseParser):
         desc = self._clean_text(str(link.get("description") or "")) or None
         return self.create_author(name=name, avatar_url=avatar, description=desc)
 
-    def _build_video_content(self, link: dict[str, Any]):
+    def _build_video_content(self, link: dict[str, Any], link_id: str):
         if not link.get("has_video"):
             return None
         video_url = str(link.get("video_url") or "").strip()
         if not video_url:
             return None
-        return self._build_video_content_from_url(video_url, None)
+        # 按帖子 ID 命名, 直链换了签名也能复用缓存
+        return self._build_video_content_from_url(video_url, None, f"xhh_{link_id}")
 
     def _build_video_content_from_url(
-        self, video_url: str, cover_url: str | None = None
+        self, video_url: str, cover_url: str | None = None, stem: str | None = None
     ):
         path = (urlparse(video_url).path or "").lower()
         if path.endswith(".m3u8"):
             task = self.downloader.ytdlp_download_video_relaxed(
-                video_url, headers=self.headers, proxy=self.proxy
+                video_url, headers=self.headers, proxy=self.proxy, file_stem=stem
             )
             return self.create_video_content_by_task(
                 task, cover_url, headers=self.headers
             )
-        return self.create_video_content(video_url, cover_url, headers=self.headers)
+        return self.create_video_content(
+            video_url,
+            cover_url,
+            headers=self.headers,
+            video_name=f"{stem}.mp4" if stem else None,
+        )
 
     def _parse_body_text_and_images(
         self, link: dict[str, Any]

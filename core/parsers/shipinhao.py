@@ -1,3 +1,4 @@
+import hashlib
 import re
 from random import choice
 from time import time
@@ -80,7 +81,7 @@ class ShipinhaoParser(BaseParser):
             token, export_id = await self._parse_share_url(share_url)
 
         feed = await self._get_feed_info(export_id, token)
-        return self._build_result(feed, share_url)
+        return self._build_result(feed, share_url, export_id)
 
     # ---------------- Step 1: 元宝换取 token + eid ----------------
 
@@ -148,7 +149,7 @@ class ShipinhaoParser(BaseParser):
 
     # ---------------- 组装解析结果 ----------------
 
-    def _build_result(self, feed: dict[str, Any], share_url: str):
+    def _build_result(self, feed: dict[str, Any], share_url: str, export_id: str):
         data = feed.get("data") or {}
         feed_info: dict[str, Any] = data.get("feedInfo") or {}
         author_info: dict[str, Any] = data.get("authorInfo") or {}
@@ -172,6 +173,8 @@ class ShipinhaoParser(BaseParser):
                 cover_url,
                 duration,
                 headers=self.media_headers,
+                # 直链里的 token 每次都变, 按 eid 命名
+                video_name=f"sph_{hashlib.md5(export_id.encode()).hexdigest()[:16]}.mp4",
             )
         ]
 

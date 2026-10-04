@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from asyncio import Task
 from pathlib import Path
 
@@ -41,9 +40,8 @@ class YouTubeCardRenderer:
             context = await asyncio.to_thread(
                 self._context, info, avatar_path, cover_path
             )
-            out_path = self.parser.cfg.cache_dir / f"yt_video_{uuid.uuid4().hex}.jpg"
-            return await self.parser.html_renderer.render(
-                self.TEMPLATE, context, out_path
+            return await self.parser.html_renderer.render_cached(
+                self.TEMPLATE, context, f"yt_video_{info.id or 'card'}"
             )
         except Exception as e:
             logger.warning(f"[油管] 卡片渲染失败 ({type(e).__name__}): {str(e)[:200]}")

@@ -75,7 +75,11 @@ class XHSParser(BaseParser):
 
         if note.type == "video" and note.video and (urls := note.video.urls):
             task = self.downloader.download_video(
-                urls[0], headers=self.headers, proxy=self.proxy, backup_urls=urls[1:]
+                urls[0],
+                video_name=f"xhs_{note.noteId}.mp4",
+                headers=self.headers,
+                proxy=self.proxy,
+                backup_urls=urls[1:],
             )
             video = self.create_video_content_by_task(
                 task, next(iter(note.image_urls), None), note.video.duration

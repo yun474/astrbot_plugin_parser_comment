@@ -1,7 +1,6 @@
 """B站视频海报: 封面 + 标题 + UP 主 + 播放/弹幕/点赞/投币/收藏/转发/评论 + 简介"""
 
 import asyncio
-import uuid
 from asyncio import Task
 from datetime import datetime, tzinfo
 from pathlib import Path
@@ -38,10 +37,9 @@ class BiliPosterRenderer:
         context = await asyncio.to_thread(
             self._context, video, page, cover_path, avatar_path, url, ai_summary
         )
-        out_path = (
-            self.cache_dir / f"bili_poster_{video.bvid}_{uuid.uuid4().hex[:8]}.jpg"
+        return await self.html.render_cached(
+            self.TEMPLATE, context, f"bili_poster_{video.bvid}"
         )
-        return await self.html.render(self.TEMPLATE, context, out_path)
 
     async def attach_comments(self, poster: Task[Path], comments: Task[Path]) -> Path:
         """评论图拼到海报下面, 一次解析少发一条消息; 评论区拿不到就只发海报"""
@@ -49,7 +47,10 @@ class BiliPosterRenderer:
         comments_path = await settle_path(comments)
         if comments_path is None:
             return poster_path
-        out_path = poster_path.with_name(f"{poster_path.stem}_comments.jpg")
+        # 海报和评论图都按内容命名, 两者都没变时拼好的图直接复用
+        out_path = poster_path.with_name(f"{poster_path.stem}_{comments_path.stem}.jpg")
+        if out_path.exists():
+            return out_path
         await asyncio.to_thread(
             self._stack, poster_path, comments_path, out_path, self.WIDTH
         )

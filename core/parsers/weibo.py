@@ -204,7 +204,13 @@ class WeiBoParser(BaseParser):
             video_url = data.get("stream_url")
 
         if video_url:
-            contents.append(self.create_video_content(video_url, cover_url))
+            contents.append(
+                self.create_video_content(
+                    video_url,
+                    cover_url,
+                    video_name=f"weibo_{fid.replace(':', '_')}.mp4",
+                )
+            )
 
         # 时间戳
         timestamp = data.get("real_date")
@@ -265,7 +271,12 @@ class WeiBoParser(BaseParser):
         # 添加视频内容
         if video_url := data.video_url:
             cover_url = data.cover_url
-            contents.append(self.create_video_content(video_url, cover_url))
+            # 视频直链带 Expires / ssig 签名, 按微博 bid 命名
+            contents.append(
+                self.create_video_content(
+                    video_url, cover_url, video_name=f"weibo_{data.bid}.mp4"
+                )
+            )
 
         # 添加图片内容
         if image_urls := data.image_urls:
