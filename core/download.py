@@ -379,6 +379,7 @@ class Downloader:
         headers: dict[str, str] | None = None,
         proxy: str | None = None,
         format: str | None = None,
+        node: bool = False,
     ) -> VideoInfo:
         if (info := self.info_cache.get(url)) is not None:
             return info
@@ -395,6 +396,9 @@ class Downloader:
             opts["cookiefile"] = str(cookiefile)
         if format:
             opts["format"] = format
+        # 带油管 Cookie 时 yt-dlp 会改用要解 JS 挑战的客户端, 取信息这步也得有运行时
+        if node:
+            opts["js_runtimes"] = {"node": {}}
         with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore
             raw = await to_thread(ydl.extract_info, url, download=False)
             if not raw:
@@ -443,7 +447,7 @@ class Downloader:
         node: bool = False,
     ) -> Path:
         info = await self.ytdlp_extract_info(
-            url, cookiefile=cookiefile, headers=headers, proxy=proxy
+            url, cookiefile=cookiefile, headers=headers, proxy=proxy, node=node
         )
         if info.duration > self.cfg.max_duration:
             logger.warning(
@@ -546,9 +550,10 @@ class Downloader:
         headers: dict[str, str] | None = None,
         proxy: str | None = None,
         format: str | None = None,
+        node: bool = False,
     ) -> Path:
         info = await self.ytdlp_extract_info(
-            url, cookiefile=cookiefile, headers=headers, proxy=proxy
+            url, cookiefile=cookiefile, headers=headers, proxy=proxy, node=node
         )
         file_name = info.file_stem(url)
         audio_path = self.cfg.cache_dir / f"{file_name}.flac"
@@ -573,6 +578,8 @@ class Downloader:
             opts["proxy"] = proxy
         if cookiefile and cookiefile.is_file():
             opts["cookiefile"] = str(cookiefile)
+        if node:
+            opts["js_runtimes"] = {"node": {}}
 
         with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore
             await self._ytdlp_download(ydl, url)

@@ -1,5 +1,11 @@
 # 更新日志
 
+## v1.10.2
+
+### 修复
+
+- 修复配置油管 Cookie 后解析报错 “The page needs to be reloaded”：获取视频信息和 `ym` 音频下载也改用 node 解 JS 挑战。
+
 ## v1.10.1
 
 ### 优化

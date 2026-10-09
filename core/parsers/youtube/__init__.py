@@ -79,6 +79,7 @@ class YouTubeParser(BaseParser):
                 url,
                 cookiefile=self.cookiejar.cookie_file,
                 proxy=self.proxy,
+                node=True,
             )
             contents.append(
                 self.create_audio_content(audio_task, duration=video_info.duration)
@@ -88,7 +89,7 @@ class YouTubeParser(BaseParser):
     async def _fetch_info(self, url: str):
         # 不传请求头, 插件通用 UA 太老, 油管会返回残缺数据 (缺发布时间等)
         video_info = await self.downloader.ytdlp_extract_info(
-            url, cookiefile=self.cookiejar.cookie_file, proxy=self.proxy
+            url, cookiefile=self.cookiejar.cookie_file, proxy=self.proxy, node=True
         )
         return video_info, await self._fetch_author_info(video_info.channel_id)
 
