@@ -114,6 +114,22 @@ class DouyinParser(BaseParser):
             logger.warning(f"[抖音] 分享页解析失败 {ty}/{vid}, 错误: {e}")
             raise ParseException(f"抖音解析失败: {e.message}") from e
 
+    # 汽水音乐单曲, 抖音里分享的歌曲短链也会跳到这里
+    # https://music.douyin.com/qishui/share/track?track_id=7664509149698361370
+    @handle(
+        "music.douyin",
+        r"music\.douyin\.com/qishui/share/track\?\S*?track_id=(?P<track_id>\d+)",
+    )
+    async def _parse_qishui(self, searched: re.Match[str]):
+        from .qishui import parse_track
+
+        return await parse_track(self, searched.group("track_id"))
+
+    # 汽水音乐 App 分享的短链
+    @handle("qishui.douyin", r"qishui\.douyin\.com/s/[a-zA-Z0-9_\-]+")
+    async def _parse_qishui_short_link(self, searched: re.Match[str]):
+        return await self.parse_with_redirect(f"https://{searched.group(0)}/")
+
     @staticmethod
     def _build_iesdouyin_url(ty: str, vid: str) -> str:
         return f"https://www.iesdouyin.com/share/{ty}/{vid}/"

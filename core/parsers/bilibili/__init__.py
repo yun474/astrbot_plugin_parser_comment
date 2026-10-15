@@ -24,6 +24,7 @@ from .common import OFFICIAL_CARD_PATTERN
 from .login import BilibiliLogin
 from .poster import BiliPosterRenderer
 from .search import BiliSearch
+from .space import BiliSpaceRenderer, fetch_space, space_image_urls
 from .web import BiliWebClient
 
 # 选择客户端
@@ -66,6 +67,11 @@ class BilibiliParser(BaseParser):
         self.poster = (
             BiliPosterRenderer(self.html_renderer, config.cache_dir, config.timezone)
             if self.mycfg.poster_render_enable is not False
+            else None
+        )
+        self.space_renderer = (
+            BiliSpaceRenderer(self.html_renderer, config.timezone)
+            if self.poster is not None
             else None
         )
         self.comment_merge_with_video = bool(self.mycfg.comment_merge_with_video)
@@ -160,6 +166,13 @@ class BilibiliParser(BaseParser):
         """解析收藏夹信息"""
         fav_id = int(searched.group("fav_id"))
         return await self.parse_favlist(fav_id)
+
+    # 收藏夹链接也挂在空间路径下, 留给收藏夹规则处理
+    @handle("space.bili", r"space\.bilibili\.com/(?P<mid>\d+)(?!\d|/favlist)")
+    @handle("/space/", r"bilibili\.com/space/(?P<mid>\d+)(?!\d|/favlist)")
+    async def _parse_space(self, searched: Match[str]):
+        """解析个人空间"""
+        return await self.parse_space(int(searched.group("mid")))
 
     @handle("/read/", r"bilibili\.com/read/cv(?P<read_id>\d+)")
     async def _parse_read(self, searched: Match[str]):
@@ -478,6 +491,41 @@ class BilibiliParser(BaseParser):
                 self.create_graphics_content(fav.cover, fav.desc)
                 for fav in favdata.medias
             ],
+        )
+
+    async def parse_space(self, mid: int):
+        """解析个人空间: 只发一张空间卡片; 关闭卡片渲染时退回文字简介"""
+        info = await fetch_space(self, mid)
+        card = info.user.card
+        avatar_url, banner_url, cover_urls = space_image_urls(info)
+        author = self.create_author(card.name, avatar_url or None)
+
+        send_groups = []
+        if self.space_renderer is not None:
+
+            def download(url: str):
+                if not url:
+                    return None
+                return self.downloader.download_img(
+                    url, headers=self.headers, proxy=self.proxy
+                )
+
+            space_card = self.space_renderer.build(
+                info,
+                avatar=author.avatar,
+                banner=download(banner_url),
+                covers=[download(url) for url in cover_urls],
+            )
+            send_groups = [
+                SendGroup(contents=[space_card], force_merge=False, render_card=False)
+            ]
+
+        return self.result(
+            url=info.url,
+            title=f"{card.name} 的个人空间",
+            text=card.sign.strip() or None,
+            author=author,
+            send_groups=send_groups,
         )
 
     async def search_video_by_title(self, title: str) -> str:

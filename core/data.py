@@ -33,6 +33,16 @@ class AudioContent(MediaContent):
     """音频内容"""
 
     duration: float = 0.0
+    cover: Path | Task[Path] | None = None
+    """专辑封面, 默认卡片里当封面显示"""
+
+    async def get_cover_path(self) -> Path | None:
+        if self.cover is None:
+            return None
+        if isinstance(self.cover, Path):
+            return self.cover
+        self.cover = await self.cover
+        return self.cover
 
 
 @dataclass(repr=False, slots=True)
@@ -259,7 +269,9 @@ class ParseResult:
     async def cover_path(self) -> Path | None:
         """获取封面路径"""
         for cont in self.contents:
-            if isinstance(cont, VideoContent):
+            if isinstance(cont, VideoContent) or (
+                isinstance(cont, AudioContent) and cont.cover
+            ):
                 return await cont.get_cover_path()
         return None
 
