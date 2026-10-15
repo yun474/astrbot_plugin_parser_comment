@@ -98,18 +98,20 @@ def test_cache_deadline_and_close_cancel_workers(module, tmp_path):
     asyncio.run(run())
 
 
-def test_disk_cache_expires_so_failed_assets_can_be_retried(module, tmp_path):
+def test_disk_cache_reused_while_content_unchanged(module, tmp_path):
     import os
-    from time import time
 
     cache = module.CommentImageCache()
     path = tmp_path / "image.jpg"
-    assert not cache.is_fresh(path)
+    assert not cache.is_cached(path)
+    # 过小的文件视为渲染失败, 不复用
+    path.write_bytes(b"x")
+    assert not cache.is_cached(path)
     path.write_bytes(b"image" * 30)
-    assert cache.is_fresh(path)
-    old = time() - cache.TTL - 1
-    os.utime(path, (old, old))
-    assert not cache.is_fresh(path)
+    assert cache.is_cached(path)
+    # 文件按内容摘要命名, 不再有时效, 很久以前的文件也照样复用
+    os.utime(path, (0, 0))
+    assert cache.is_cached(path)
 
 
 def test_assets_dedup_deadline_concurrency_and_partial_success(module):

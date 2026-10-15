@@ -46,12 +46,17 @@ def bili(monkeypatch: pytest.MonkeyPatch):
 
 
 class FakeHtml:
-    def __init__(self):
+    def __init__(self, cache_dir: Path = Path(".")):
         self.calls = []
+        self.cache_dir = cache_dir
 
     async def render(self, template, context, out_path, *, selector="#root"):
         self.calls.append((template, context))
         return out_path
+
+    async def render_cached(self, template, context, name):
+        # 模拟真实实现的命名 (名称_内容摘要.jpg), 摘要用固定值代替
+        return await self.render(template, context, self.cache_dir / f"{name}_fake.jpg")
 
 
 def test_comment_image_cache_reuses_work_and_changes_with_message(bili, tmp_path):
@@ -281,7 +286,7 @@ def test_poster_context(bili, tmp_path):
     assert page.cover == video.pic  # 分 P 没首帧时退回视频封面
     assert video.honors == ["热门收录"]
 
-    html = FakeHtml()
+    html = FakeHtml(tmp_path)
     poster = bili.poster.BiliPosterRenderer(html, tmp_path, ZoneInfo("Asia/Shanghai"))
     out = asyncio.run(
         poster.render(
